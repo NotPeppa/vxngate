@@ -1,12 +1,33 @@
 # SoftEther VPN Client + SOCKS5 Proxy + Web 管理界面
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 安装编译依赖
+RUN apt-get update && apt-get install -y \
+    wget \
+    gcc \
+    make \
+    libreadline-dev \
+    libssl-dev \
+    libncurses5-dev \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 下载并编译 SoftEther VPN Client
+WORKDIR /build
+RUN wget https://github.com/SoftEtherVPN/SoftEtherVPN_Stable/releases/download/v4.43-9799-beta/softether-vpnclient-v4.43-9799-beta-2023.08.31-linux-x64-64bit.tar.gz \
+    && tar xzf softether-vpnclient-*.tar.gz \
+    && cd vpnclient \
+    && echo "1\n1\n1" | make
+
+# 最终镜像
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 安装依赖
+# 安装运行时依赖
 RUN apt-get update && apt-get install -y \
-    wget \
-    ca-certificates \
     dante-server \
     iproute2 \
     iptables \
@@ -15,28 +36,8 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# 下载 SoftEther VPN Client（使用最新稳定版）
-WORKDIR /tmp
-RUN wget -q --show-progress \
-    https://github.com/SoftEtherVPN/SoftEtherVPN_Stable/releases/download/v4.43-9799-beta/softether-vpnclient-v4.43-9799-beta-2023.08.31-linux-x64-64bit.tar.gz \
-    && tar xzf softether-vpnclient-*.tar.gz \
-    && mkdir -p /opt/vpnclient \
-    && cp -r vpnclient/* /opt/vpnclient/ \
-    && rm -rf /tmp/*
-
-# 编译 SoftEther VPN Client
-WORKDIR /opt/vpnclient
-RUN apt-get update && apt-get install -y \
-    gcc \
-    make \
-    libreadline-dev \
-    libssl-dev \
-    libncurses5-dev \
-    zlib1g-dev \
-    && yes 1 | make \
-    && apt-get purge -y gcc make libreadline-dev libssl-dev libncurses5-dev zlib1g-dev \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+# 从构建阶段复制编译好的 SoftEther VPN Client
+COPY --from=builder /build/vpnclient /opt/vpnclient
 
 # 安装 Python 依赖
 COPY web/requirements.txt /tmp/requirements.txt
@@ -52,6 +53,8 @@ RUN chmod +x /entrypoint.sh
 
 # 创建配置目录
 RUN mkdir -p /config
+
+WORKDIR /opt/vpnclient
 
 EXPOSE 1080 5000
 

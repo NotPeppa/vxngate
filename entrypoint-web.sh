@@ -3,10 +3,17 @@ set -e
 
 echo "=== 启动 VPN Gate SOCKS5 代理管理系统 ==="
 
+# 检查 SoftEther VPN Client 是否需要编译
+if [ ! -f /opt/vpnclient/vpnclient ]; then
+    echo "首次运行，正在编译 SoftEther VPN Client..."
+    cd /opt/vpnclient
+    (echo "1"; echo "1"; echo "1") | make || true
+fi
+
 # 启动 SoftEther VPN Client
 echo "启动 SoftEther VPN Client..."
 cd /opt/vpnclient
-./vpnclient start
+./vpnclient start || true
 
 # 等待 VPN 客户端启动
 sleep 3

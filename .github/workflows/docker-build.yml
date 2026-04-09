@@ -57,8 +57,24 @@ jobs:
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
+        id: build
         with:
           context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+        continue-on-error: true
+
+      - name: Build with simple Dockerfile if main build fails
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.simple
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

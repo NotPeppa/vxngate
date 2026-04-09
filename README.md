@@ -195,20 +195,28 @@ ports:
 
 ### Docker 构建失败
 
-如果遇到 SoftEther VPN 编译错误，尝试：
+如果遇到 SoftEther VPN 编译错误，按顺序尝试：
 
-**方法 1：使用简化版 Dockerfile**
+**方法 1：使用预编译版（最可靠）**
+```bash
+docker build -f Dockerfile.prebuilt -t vpngate-socks5 .
+docker-compose up -d
+```
+
+**方法 2：使用简化版**
 ```bash
 docker build -f Dockerfile.simple -t vpngate-socks5 .
 docker-compose up -d
 ```
 
-**方法 2：使用预构建镜像**
+**方法 3：使用预构建镜像**
 ```bash
 # 修改 docker-compose.yml，将 build: . 改为：
 # image: ghcr.io/your-username/vpngate-socks5:latest
 docker-compose up -d
 ```
+
+详细说明请查看 [BUILD-GUIDE.md](BUILD-GUIDE.md)
 
 ### Web 界面无法访问
 - 确认容器正在运行：`docker ps`

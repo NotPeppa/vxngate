@@ -72,17 +72,35 @@ docker build --no-cache -t vpngate-socks5 .
 
 ### 3. Dockerfile 版本说明
 
-#### Dockerfile（标准版）
-- 下载 SoftEther VPN 源码
-- 编译并安装
-- 清理编译工具以减小镜像大小
-- 推荐用于生产环境
+#### Dockerfile（多阶段构建 - 推荐）
+- 使用多阶段构建
+- 编译和运行环境分离
+- 镜像体积最小
+- 最适合生产环境
 
-#### Dockerfile.simple（简化版）
+#### Dockerfile.simple（单阶段构建）
 - 保留所有编译工具
 - 构建步骤更简单
 - 镜像体积较大
-- 推荐用于测试和开发
+- 适合测试和开发
+
+#### Dockerfile.prebuilt（预编译版本 - 最可靠）
+- 不需要编译
+- 首次运行时自动编译
+- 构建最快最可靠
+- 适合快速部署
+
+**使用方法：**
+```bash
+# 方法 1：多阶段构建（推荐）
+docker build -t vpngate-socks5 .
+
+# 方法 2：简化版
+docker build -f Dockerfile.simple -t vpngate-socks5 .
+
+# 方法 3：预编译版（最可靠）
+docker build -f Dockerfile.prebuilt -t vpngate-socks5 .
+```
 
 ### 4. 手动构建步骤
 
