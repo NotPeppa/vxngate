@@ -384,22 +384,59 @@
 
         async function loadServers() {
             try {
+                console.log('开始加载服务器列表...');
                 const response = await fetch('/api/servers');
+                console.log('API 响应状态:', response.status);
+                
                 const data = await response.json();
+                console.log('API 响应数据:', data);
                 
                 if (data.success) {
                     allServers = data.servers;
-                    filterServers();
+                    console.log('获取到服务器数量:', allServers.length);
+                    
+                    if (allServers.length === 0) {
+                        document.getElementById('serversContainer').innerHTML = `
+                            <div class="empty-state">
+                                <h3>⚠️ 没有找到服务器</h3>
+                                <p>VPN Gate API 返回了空列表</p>
+                                <p style="font-size: 14px; color: #666;">可能原因：</p>
+                                <ul style="text-align: left; display: inline-block; color: #666;">
+                                    <li>VPN Gate 服务暂时不可用</li>
+                                    <li>网络连接问题</li>
+                                    <li>API 格式变更</li>
+                                </ul>
+                                <button class="btn btn-primary" onclick="loadServers()" style="margin-top: 20px;">重试</button>
+                                <button class="btn btn-primary" onclick="testAPI()" style="margin-top: 20px; margin-left: 10px;">测试 API</button>
+                            </div>
+                        `;
+                    } else {
+                        filterServers();
+                    }
+                } else {
+                    throw new Error('API 返回失败状态');
                 }
             } catch (error) {
                 console.error('加载服务器失败:', error);
                 document.getElementById('serversContainer').innerHTML = `
                     <div class="empty-state">
                         <h3>❌ 加载失败</h3>
-                        <p>无法获取服务器列表，请检查网络连接</p>
+                        <p>无法获取服务器列表</p>
+                        <p style="font-size: 14px; color: #666;">错误: ${error.message}</p>
                         <button class="btn btn-primary" onclick="loadServers()" style="margin-top: 20px;">重试</button>
+                        <button class="btn btn-primary" onclick="testAPI()" style="margin-top: 20px; margin-left: 10px;">测试 API</button>
                     </div>
                 `;
+            }
+        }
+
+        async function testAPI() {
+            try {
+                const response = await fetch('/api/test');
+                const data = await response.json();
+                alert('API 测试结果:\n' + JSON.stringify(data, null, 2));
+            } catch (error) {
+                alert('API 测试失败: ' + error.message);
             }
         }
 

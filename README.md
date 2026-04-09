@@ -3,7 +3,6 @@
 > 将 VPN Gate 的 SSL-VPN 转换为 SOCKS5 代理，带美观的 Web 管理界面
 
 [![Docker Build](https://github.com/your-username/vpngate-socks5/actions/workflows/docker-build.yml/badge.svg)](https://github.com/your-username/vpngate-socks5/actions/workflows/docker-build.yml)
-[![Release](https://github.com/your-username/vpngate-socks5/actions/workflows/release.yml/badge.svg)](https://github.com/your-username/vpngate-socks5/actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/your-username/vpngate-socks5)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/your-username/vpngate-socks5)](https://github.com/your-username/vpngate-socks5/releases)
 
@@ -286,6 +285,7 @@ services:
 ## 📖 更多文档
 
 - [Windows 用户指南](README-Windows.md)
+- [故障排查指南](TROUBLESHOOTING.md) ⭐
 - [Docker 构建说明](DOCKER-BUILD-INFO.md)
 - [构建问题排查](BUILD-GUIDE.md)
 - [贡献指南](CONTRIBUTING.md)

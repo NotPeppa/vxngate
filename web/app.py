@@ -42,44 +42,71 @@ class VPNManager:
         try:
             # VPN Gate CSV API
             url = 'https://www.vpngate.net/api/iphone/'
-            response = requests.get(url, timeout=10)
+            print(f"正在从 {url} 获取服务器列表...")
+            
+            response = requests.get(url, timeout=30)
             response.raise_for_status()
             
+            print(f"响应状态码: {response.status_code}")
+            print(f"响应长度: {len(response.text)} 字符")
+            
             # 解析 CSV（跳过前两行注释）
-            lines = response.text.strip().split('\n')[2:]
-            reader = csv.DictReader(lines)
+            lines = response.text.strip().split('\n')
+            print(f"总行数: {len(lines)}")
+            
+            if len(lines) < 3:
+                print("错误: CSV 数据行数不足")
+                return []
+            
+            # 跳过前两行注释
+            csv_lines = lines[2:]
+            print(f"CSV 数据行数: {len(csv_lines)}")
+            
+            # 使用 csv.DictReader 解析
+            reader = csv.DictReader(csv_lines)
             
             servers = []
-            for row in reader:
-                # 只选择支持 SSL-VPN 的服务器
-                if row.get('HostName') and row.get('IP'):
-                    server = {
-                        'hostname': row.get('HostName', ''),
-                        'ip': row.get('IP', ''),
-                        'country': row.get('CountryLong', 'Unknown'),
-                        'country_code': row.get('CountryShort', ''),
-                        'speed': int(row.get('Speed', 0)),
-                        'ping': int(row.get('Ping', 0)) if row.get('Ping') else 999,
-                        'uptime': int(row.get('Uptime', 0)),
-                        'sessions': int(row.get('NumVpnSessions', 0)),
-                        'total_users': int(row.get('TotalUsers', 0)),
-                        'total_traffic': float(row.get('TotalTraffic', 0)),
-                        'log_policy': row.get('LogType', 'Unknown'),
-                        'operator': row.get('Operator', 'Anonymous'),
-                        'message': row.get('Message', ''),
-                        'score': int(row.get('Score', 0)),
-                        # SSL-VPN 端口（通常是 443 或其他）
-                        'port': 443,
-                        'supports_ssl': True
-                    }
-                    servers.append(server)
+            for idx, row in enumerate(reader):
+                try:
+                    # 只选择支持 SSL-VPN 的服务器
+                    if row.get('HostName') and row.get('IP'):
+                        server = {
+                            'hostname': row.get('HostName', ''),
+                            'ip': row.get('IP', ''),
+                            'country': row.get('CountryLong', 'Unknown'),
+                            'country_code': row.get('CountryShort', ''),
+                            'speed': int(row.get('Speed', 0) or 0),
+                            'ping': int(row.get('Ping', 0) or 0) if row.get('Ping') else 999,
+                            'uptime': int(row.get('Uptime', 0) or 0),
+                            'sessions': int(row.get('NumVpnSessions', 0) or 0),
+                            'total_users': int(row.get('TotalUsers', 0) or 0),
+                            'total_traffic': float(row.get('TotalTraffic', 0) or 0),
+                            'log_policy': row.get('LogType', 'Unknown'),
+                            'operator': row.get('Operator', 'Anonymous'),
+                            'message': row.get('Message', ''),
+                            'score': int(row.get('Score', 0) or 0),
+                            # SSL-VPN 端口（通常是 443 或其他）
+                            'port': 443,
+                            'supports_ssl': True
+                        }
+                        servers.append(server)
+                except Exception as e:
+                    print(f"解析第 {idx} 行失败: {e}")
+                    continue
+            
+            print(f"成功解析 {len(servers)} 个服务器")
             
             # 按分数排序
             servers.sort(key=lambda x: x['score'], reverse=True)
             return servers
         
+        except requests.exceptions.RequestException as e:
+            print(f"网络请求失败: {e}")
+            return []
         except Exception as e:
             print(f"获取服务器列表失败: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def get_status(self):
@@ -193,6 +220,25 @@ vpn_manager = VPNManager()
 def index():
     """主页"""
     return render_template('index.html')
+
+@app.route('/api/test')
+def test_api():
+    """测试 VPN Gate API 连接"""
+    try:
+        url = 'https://www.vpngate.net/api/iphone/'
+        response = requests.get(url, timeout=10)
+        
+        return jsonify({
+            'success': True,
+            'status_code': response.status_code,
+            'content_length': len(response.text),
+            'first_100_chars': response.text[:100]
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/api/servers')
 def get_servers():
