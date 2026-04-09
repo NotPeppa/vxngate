@@ -286,6 +286,8 @@ services:
 ## 📖 更多文档
 
 - [Windows 用户指南](README-Windows.md)
+- [Docker 构建说明](DOCKER-BUILD-INFO.md)
+- [构建问题排查](BUILD-GUIDE.md)
 - [贡献指南](CONTRIBUTING.md)
 - [更新日志](CHANGELOG.md)
 

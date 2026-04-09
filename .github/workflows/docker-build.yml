@@ -55,9 +55,25 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image (prebuilt version)
+        id: build-prebuilt
         uses: docker/build-push-action@v5
-        id: build
+        continue-on-error: true
+        with:
+          context: .
+          file: Dockerfile.prebuilt
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Docker image (main version)
+        if: steps.build-prebuilt.outcome == 'failure'
+        id: build-main
+        uses: docker/build-push-action@v5
+        continue-on-error: true
         with:
           context: .
           file: Dockerfile
@@ -67,10 +83,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-        continue-on-error: true
 
-      - name: Build with simple Dockerfile if main build fails
-        if: steps.build.outcome == 'failure'
+      - name: Build and push Docker image (simple version)
+        if: steps.build-prebuilt.outcome == 'failure' && steps.build-main.outcome == 'failure'
+        id: build-simple
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -82,10 +98,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Generate artifact attestation
-        if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.build-prebuilt.outcome }}" == "success" ]; then
+            echo "✅ Prebuilt version: Success" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.build-main.outcome }}" == "success" ]; then
+            echo "✅ Main version: Success" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.build-simple.outcome }}" == "success" ]; then
+            echo "✅ Simple version: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ All builds failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
