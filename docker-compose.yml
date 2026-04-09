@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  vpngate-socks:
+    build: .
+    container_name: vpngate-socks5-web
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    ports:
+      - "1080:1080"  # SOCKS5 代理端口
+      - "5000:5000"  # Web 管理界面端口
+    volumes:
+      - ./config:/config  # 持久化配置
+    restart: unless-stopped
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0

@@ -1,0 +1,51 @@
+# Docker
+*.log
+build.log
+build-simple.log
+
+# VPN 配置文件（可能包含敏感信息）
+vpn_*.config
+config/
+
+# 临时文件
+*.tmp
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Release
+release/
+*.zip
+*.tar.gz
