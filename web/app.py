@@ -51,36 +51,63 @@ class VPNManager:
             print(f"响应长度: {len(response.text)} 字符")
             
             # 解析 CSV（跳过前两行注释）
+            # VPN Gate 返回格式：第1行是 *vpn_servers，第2行是 #开头的表头，第3行开始是数据
             lines = response.text.strip().split('\n')
             print(f"总行数: {len(lines)}")
+            print(f"前3行内容: {lines[:3] if len(lines) >= 3 else lines}")
             
             if len(lines) < 3:
                 print("错误: CSV 数据行数不足")
                 return []
             
-            # 跳过前两行注释
-            csv_lines = lines[2:]
-            print(f"CSV 数据行数: {len(csv_lines)}")
+            # 跳过第1行(*vpn_servers)，从第2行开始（#开头的表头）
+            # 移除表头的 # 号
+            csv_data = lines[1:]  # 从第2行开始
+            if csv_data[0].startswith('#'):
+                csv_data[0] = csv_data[0][1:]  # 移除表头的 # 号
+            
+            print(f"CSV 表头: {csv_data[0][:100]}")
+            print(f"CSV 数据行数: {len(csv_data) - 1}")
             
             # 使用 csv.DictReader 解析
-            reader = csv.DictReader(csv_lines)
+            reader = csv.DictReader(csv_data)
             
             servers = []
             for idx, row in enumerate(reader):
                 try:
+                    # 调试：打印第一行的所有字段名
+                    if idx == 0:
+                        print(f"CSV字段名: {list(row.keys())}")
+                    
                     # 只选择支持 SSL-VPN 的服务器
                     if row.get('HostName') and row.get('IP'):
+                        # 兼容 TotalUser 和 TotalUsers 两种字段名
+                        total_users = row.get('TotalUsers') or row.get('TotalUser', 0)
+                        
+                        # 安全解析数值字段（可能包含'-'或空值）
+                        def safe_int(value, default=0):
+                            try:
+                                return int(value) if value and value != '-' else default
+                            except (ValueError, TypeError):
+                                return default
+                        
+                        def safe_float(value, default=0.0):
+                            try:
+                                return float(value) if value and value != '-' else default
+                            except (ValueError, TypeError):
+                                return default
+                        
                         server = {
                             'hostname': row.get('HostName', ''),
                             'ip': row.get('IP', ''),
                             'country': row.get('CountryLong', 'Unknown'),
                             'country_code': row.get('CountryShort', ''),
-                            'speed': int(row.get('Speed', 0) or 0),
-                            'ping': int(row.get('Ping', 0) or 0) if row.get('Ping') else 999,
-                            'uptime': int(row.get('Uptime', 0) or 0),
-                            'sessions': int(row.get('NumVpnSessions', 0) or 0),
-                            'total_users': int(row.get('TotalUsers', 0) or 0),
-                            'total_traffic': float(row.get('TotalTraffic', 0) or 0),
+                            'speed': safe_int(row.get('Speed'), 0),
+                            'ping': safe_int(row.get('Ping'), 999),
+                            'uptime': safe_int(row.get('Uptime'), 0),
+                            'sessions': safe_int(row.get('NumVpnSessions'), 0),
+                            'total_users': safe_int(total_users, 0),
+                            'total_traffic': safe_float(row.get('TotalTraffic'), 0.0),
                             'log_policy': row.get('LogType', 'Unknown'),
                             'operator': row.get('Operator', 'Anonymous'),
                             'message': row.get('Message', ''),
