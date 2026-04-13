@@ -322,21 +322,25 @@ class VPNManager:
                 'current_server': None,
                 'socks_port': 1080
             }
+
+    def run_vpncmd(self, args, timeout=15):
+        """执行 vpncmd 并返回 (ok, output)"""
+        cmd = [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD'] + args
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        output = ((result.stdout or '') + '\n' + (result.stderr or '')).strip()
+        return result.returncode == 0, output
     
     def disconnect(self):
         """断开当前连接"""
         try:
-            if self.current_connection:
-                subprocess.run(
-                    [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 
-                     'AccountDisconnect', 'vpngate'],
-                    timeout=10
-                )
-                subprocess.run(
-                    [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 
-                     'AccountDelete', 'vpngate'],
-                    timeout=10
-                )
+            ok, out = self.run_vpncmd(['AccountDisconnect', 'vpngate'], timeout=10)
+            if not ok and 'Error code: 36' not in out:
+                print(f"AccountDisconnect 失败: {out}")
+
+            ok, out = self.run_vpncmd(['AccountDelete', 'vpngate'], timeout=10)
+            if not ok and 'Error code: 36' not in out:
+                print(f"AccountDelete 失败: {out}")
+
             return True
         except Exception as e:
             print(f"断开连接失败: {e}")
@@ -381,45 +385,45 @@ class VPNManager:
             self.disconnect()
             
             # 创建新连接
-            commands = [
-                # 删除旧的虚拟网卡（如果存在）
-                [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 'NicDelete', 'vpn'],
-                # 创建虚拟网卡
-                [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 'NicCreate', 'vpn'],
-                # 创建账户
-                [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 
-                 'AccountCreate', 'vpngate', 
-                 f'/SERVER:{server_ip}:{server_port}', 
-                 '/HUB:VPNGATE', 
-                 '/USERNAME:vpn', 
-                 '/NICNAME:vpn'],
-                # 设置密码
-                [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 
-                 'AccountPasswordSet', 'vpngate', 
-                 '/PASSWORD:vpn', 
-                 '/TYPE:standard'],
-                # 连接
-                [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 
-                 'AccountConnect', 'vpngate']
+            steps = [
+                ('NicDelete', ['NicDelete', 'vpn']),
+                ('NicCreate', ['NicCreate', 'vpn']),
+                (
+                    'AccountCreate',
+                    [
+                        'AccountCreate', 'vpngate',
+                        f'/SERVER:{server_ip}:{server_port}',
+                        '/HUB:VPNGATE',
+                        '/USERNAME:vpn',
+                        '/NICNAME:vpn'
+                    ]
+                ),
+                ('AccountPasswordSet', ['AccountPasswordSet', 'vpngate', '/PASSWORD:vpn', '/TYPE:standard']),
+                ('AccountConnect', ['AccountConnect', 'vpngate'])
             ]
-            
-            for idx, cmd in enumerate(commands):
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-                # 第一个命令 NicDelete 在首次连接时失败是正常情况
-                if idx == 0 and result.returncode != 0:
+
+            for step_name, args in steps:
+                ok, out = self.run_vpncmd(args, timeout=15)
+
+                # NicDelete 在首次连接时失败是正常情况
+                if step_name == 'NicDelete' and not ok:
                     continue
 
-                if result.returncode != 0:
-                    stderr = (result.stderr or '').strip()
-                    stdout = (result.stdout or '').strip()
-                    err_msg = stderr or stdout or 'unknown error'
+                # 账户已存在则先删除再重建一次
+                if step_name == 'AccountCreate' and (not ok) and 'Error code: 34' in out:
+                    self.run_vpncmd(['AccountDisconnect', 'vpngate'], timeout=10)
+                    self.run_vpncmd(['AccountDelete', 'vpngate'], timeout=10)
+                    ok, out = self.run_vpncmd(args, timeout=15)
+
+                if not ok:
+                    err_msg = out or 'unknown error'
                     if 'Error code: 31' in err_msg:
                         err_msg = (
                             'NicCreate 失败（Error code: 31），通常是容器无法访问 TUN/TAP。'
                             '请确认使用 Linux 内核并启用 /dev/net/tun 与特权权限。'
                         )
                     self.last_error = f"vpncmd 失败: {err_msg}"
-                    print(f"命令执行失败: {' '.join(cmd)}")
+                    print(f"命令执行失败: {step_name}")
                     print(f"错误: {err_msg}")
                     return False
             
