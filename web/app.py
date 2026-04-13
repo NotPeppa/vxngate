@@ -11,6 +11,7 @@ import json
 import shutil
 import time
 import re
+import socket
 from datetime import datetime
 from requests.adapters import HTTPAdapter
 
@@ -137,6 +138,35 @@ class VPNManager:
 
     def probe_vpn_egress(self, source_ip):
         """真实出网探测：绑定 VPN 网卡 IP 发起 HTTPS 请求"""
+        def tcp_probe(host, port):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            try:
+                sock.bind((source_ip, 0))
+                sock.connect((host, port))
+                return True, None
+            except Exception as e:
+                return False, str(e)
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        tcp_targets = [
+            ('1.1.1.1', 443),
+            ('8.8.8.8', 53),
+            ('9.9.9.9', 53)
+        ]
+
+        tcp_last_error = None
+        for host, port in tcp_targets:
+            ok, err = tcp_probe(host, port)
+            if ok:
+                return True, None
+            tcp_last_error = f'{host}:{port} 连接失败: {err}'
+
+        # 如果 TCP 探测全部失败，再尝试 HTTPS 探测（更严格）
         class SourceAddressAdapter(HTTPAdapter):
             def __init__(self, bind_ip, **kwargs):
                 self.bind_ip = bind_ip
@@ -165,7 +195,7 @@ class VPNManager:
             except Exception as e:
                 last_error = f'{url} 请求失败: {e}'
 
-        return False, last_error or '出网探测失败'
+        return False, last_error or tcp_last_error or '出网探测失败'
 
     def check_tun_ready(self):
         """检查 TUN 设备是否可用"""
