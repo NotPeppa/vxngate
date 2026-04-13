@@ -8,6 +8,7 @@ import csv
 import subprocess
 import os
 import json
+import shutil
 from datetime import datetime
 
 app = Flask(__name__)
@@ -221,11 +222,17 @@ class VPNManager:
             import time
             time.sleep(5)
             
-            # 配置网卡
-            subprocess.run(['dhclient', 'vpn_vpn'], timeout=10)
+            # 配置网卡（镜像里通常是 dhcpcd5，不一定有 dhclient）
+            if shutil.which('dhclient'):
+                subprocess.run(['dhclient', 'vpn_vpn'], timeout=15)
+            elif shutil.which('dhcpcd'):
+                subprocess.run(['dhcpcd', 'vpn_vpn'], timeout=15)
+            else:
+                print("警告: 未找到 dhclient/dhcpcd，跳过网卡 DHCP 配置")
             
             # 重启 SOCKS5 代理
-            subprocess.run(['pkill', '-9', 'danted'], timeout=5)
+            if shutil.which('pkill'):
+                subprocess.run(['pkill', '-9', 'danted'], timeout=5)
             subprocess.run(['danted', '-f', '/etc/danted.conf'], timeout=5)
             
             self.current_connection = {
