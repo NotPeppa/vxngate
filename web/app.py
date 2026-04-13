@@ -10,7 +10,9 @@ import os
 import json
 import shutil
 import time
+import re
 from datetime import datetime
+from requests.adapters import HTTPAdapter
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('WEB_SESSION_SECRET', 'dev-change-this-secret')
@@ -97,6 +99,73 @@ class VPNManager:
         if result.returncode != 0:
             return False
         return 'inet ' in (result.stdout or '')
+
+    def get_interface_ipv4(self, interface_name):
+        """获取网卡 IPv4 地址"""
+        result = subprocess.run(
+            ['ip', '-4', 'addr', 'show', interface_name],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            return None
+
+        match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', result.stdout or '')
+        if not match:
+            return None
+        return match.group(1)
+
+    def get_account_session_status(self):
+        """读取 SoftEther 账户会话状态"""
+        result = subprocess.run(
+            [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 'AccountStatusGet', 'vpngate'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        output = (result.stdout or '') + '\n' + (result.stderr or '')
+
+        if 'Session Status' in output:
+            if 'Connected' in output:
+                return 'Connected', None
+            if 'Retrying' in output:
+                return 'Retrying', output.strip()
+            if 'Disconnected' in output:
+                return 'Disconnected', output.strip()
+
+        return 'Unknown', output.strip()
+
+    def probe_vpn_egress(self, source_ip):
+        """真实出网探测：绑定 VPN 网卡 IP 发起 HTTPS 请求"""
+        class SourceAddressAdapter(HTTPAdapter):
+            def __init__(self, bind_ip, **kwargs):
+                self.bind_ip = bind_ip
+                super().__init__(**kwargs)
+
+            def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+                pool_kwargs['source_address'] = (self.bind_ip, 0)
+                return super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
+
+        session = requests.Session()
+        session.mount('http://', SourceAddressAdapter(source_ip))
+        session.mount('https://', SourceAddressAdapter(source_ip))
+
+        probe_urls = [
+            'https://ipv4.ip.sb',
+            'https://api.ipify.org'
+        ]
+
+        last_error = None
+        for url in probe_urls:
+            try:
+                resp = session.get(url, timeout=8)
+                if resp.status_code == 200 and resp.text.strip():
+                    return True, None
+                last_error = f'{url} 返回状态码 {resp.status_code}'
+            except Exception as e:
+                last_error = f'{url} 请求失败: {e}'
+
+        return False, last_error or '出网探测失败'
 
     def check_tun_ready(self):
         """检查 TUN 设备是否可用"""
@@ -389,6 +458,31 @@ class VPNManager:
 
             if not self.interface_has_ipv4('vpn_vpn'):
                 self.last_error = 'VPN 虚拟网卡已创建但未获取到 IPv4 地址，无法转发流量'
+                print(self.last_error)
+                return False
+
+            vpn_ip = self.get_interface_ipv4('vpn_vpn')
+            if not vpn_ip:
+                self.last_error = '无法读取 VPN 虚拟网卡 IPv4 地址'
+                print(self.last_error)
+                return False
+
+            if vpn_ip.startswith('169.254.'):
+                self.last_error = 'VPN 虚拟网卡只拿到链路本地地址(169.254.x.x)，VPN 实际未连通'
+                print(self.last_error)
+                return False
+
+            session_status, session_output = self.get_account_session_status()
+            if session_status != 'Connected':
+                self.last_error = f'VPN 会话未建立，当前状态: {session_status}'
+                if session_output:
+                    self.last_error += f'\n{session_output}'
+                print(self.last_error)
+                return False
+
+            probe_ok, probe_error = self.probe_vpn_egress(vpn_ip)
+            if not probe_ok:
+                self.last_error = f'VPN 真实出网探测失败: {probe_error}'
                 print(self.last_error)
                 return False
             
