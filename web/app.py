@@ -87,6 +87,17 @@ class VPNManager:
         )
         return result.returncode == 0
 
+    def interface_has_ipv4(self, interface_name):
+        """检查网卡是否拿到 IPv4 地址"""
+        result = subprocess.run(
+            ['ip', '-4', 'addr', 'show', interface_name],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            return False
+        return 'inet ' in (result.stdout or '')
+
     def check_tun_ready(self):
         """检查 TUN 设备是否可用"""
         tun_path = '/dev/net/tun'
@@ -353,11 +364,33 @@ class VPNManager:
 
             # 配置网卡（镜像里通常是 dhcpcd5，不一定有 dhclient）
             if shutil.which('dhclient'):
-                subprocess.run(['dhclient', 'vpn_vpn'], timeout=15)
+                dhcp_result = subprocess.run(
+                    ['dhclient', 'vpn_vpn'],
+                    capture_output=True,
+                    text=True,
+                    timeout=20
+                )
             elif shutil.which('dhcpcd'):
-                subprocess.run(['dhcpcd', 'vpn_vpn'], timeout=15)
+                dhcp_result = subprocess.run(
+                    ['dhcpcd', 'vpn_vpn'],
+                    capture_output=True,
+                    text=True,
+                    timeout=20
+                )
             else:
                 print("警告: 未找到 dhclient/dhcpcd，跳过网卡 DHCP 配置")
+                dhcp_result = None
+
+            if dhcp_result is not None and dhcp_result.returncode != 0:
+                err_msg = (dhcp_result.stderr or dhcp_result.stdout or '').strip() or 'DHCP 配置失败'
+                self.last_error = f'VPN 网卡配置失败: {err_msg}'
+                print(self.last_error)
+                return False
+
+            if not self.interface_has_ipv4('vpn_vpn'):
+                self.last_error = 'VPN 虚拟网卡已创建但未获取到 IPv4 地址，无法转发流量'
+                print(self.last_error)
+                return False
             
             # 重启 SOCKS5 代理（避免前台进程阻塞导致超时）
             socks_ok, socks_error = self.start_socks_proxy()

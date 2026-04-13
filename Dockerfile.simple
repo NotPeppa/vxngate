@@ -6,6 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # 一次性安装所有依赖
 RUN apt-get update && apt-get install -y \
     wget \
+    ca-certificates \
     gcc \
     make \
     libreadline-dev \
@@ -22,9 +23,11 @@ RUN apt-get update && apt-get install -y \
 
 # 下载 SoftEther VPN Client
 WORKDIR /opt
-RUN wget https://github.com/SoftEtherVPN/SoftEtherVPN_Stable/releases/download/v4.43-9799-beta/softether-vpnclient-v4.43-9799-beta-2023.08.31-linux-x64-64bit.tar.gz \
-    && tar xzf softether-vpnclient-*.tar.gz \
-    && rm softether-vpnclient-*.tar.gz
+RUN set -eux; \
+    url="https://github.com/SoftEtherVPN/SoftEtherVPN_Stable/releases/download/v4.43-9799-beta/softether-vpnclient-v4.43-9799-beta-2023.08.31-linux-x64-64bit.tar.gz"; \
+    wget --https-only --tries=5 --waitretry=3 --retry-connrefused --timeout=30 -O softether-vpnclient.tar.gz "$url"; \
+    tar xzf softether-vpnclient.tar.gz; \
+    rm softether-vpnclient.tar.gz
 
 # 编译 SoftEther VPN Client
 WORKDIR /opt/vpnclient
