@@ -2,7 +2,7 @@
 """
 VPN Gate SOCKS5 代理管理 Web 界面
 """
-from flask import Flask, render_template, jsonify, request, Response
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session
 import requests
 import csv
 import subprocess
@@ -12,6 +12,7 @@ import shutil
 from datetime import datetime
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('WEB_SESSION_SECRET', 'dev-change-this-secret')
 
 # 配置文件路径
 CONFIG_FILE = '/config/vpn_config.json'
@@ -23,26 +24,52 @@ def check_web_auth():
     web_password = os.environ.get('WEB_PASSWORD')
     if not web_password:
         return True
-
-    web_username = os.environ.get('WEB_USERNAME', 'admin')
-    auth = request.authorization
-    if not auth:
-        return False
-
-    return auth.username == web_username and auth.password == web_password
+    return bool(session.get('web_authed'))
 
 
 @app.before_request
 def require_web_auth():
-    """为全部页面和 API 增加基础认证"""
+    """为全部页面和 API 增加认证（非浏览器弹窗）"""
     if check_web_auth():
         return None
 
-    return Response(
-        'Authentication required',
-        401,
-        {'WWW-Authenticate': 'Basic realm="VPN Gate Admin"'}
-    )
+    if request.path in ['/login']:
+        return None
+
+    if request.path.startswith('/api/'):
+        return jsonify({'success': False, 'error': '未登录或登录已过期'}), 401
+
+    return redirect(url_for('login', next=request.path))
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Web 登录页"""
+    web_password = os.environ.get('WEB_PASSWORD')
+    if not web_password:
+        return redirect(url_for('index'))
+
+    error = None
+    if request.method == 'POST':
+        web_username = os.environ.get('WEB_USERNAME', 'admin')
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        next_path = request.form.get('next', '/')
+
+        if username == web_username and password == web_password:
+            session['web_authed'] = True
+            return redirect(next_path or '/')
+
+        error = '用户名或密码错误'
+
+    return render_template('login.html', error=error, next=request.args.get('next', '/'))
+
+
+@app.route('/logout')
+def logout():
+    """退出登录"""
+    session.pop('web_authed', None)
+    return redirect(url_for('login'))
 
 class VPNManager:
     def __init__(self):
@@ -58,6 +85,17 @@ class VPNManager:
             text=True
         )
         return result.returncode == 0
+
+    def check_tun_ready(self):
+        """检查 TUN 设备是否可用"""
+        tun_path = '/dev/net/tun'
+        if not os.path.exists(tun_path):
+            return False, '容器内缺少 /dev/net/tun，无法创建 SoftEther 虚拟网卡'
+
+        if not os.access(tun_path, os.R_OK | os.W_OK):
+            return False, '容器对 /dev/net/tun 没有读写权限，请检查 Docker 权限配置'
+
+        return True, None
     
     def load_config(self):
         """加载配置"""
@@ -224,6 +262,13 @@ class VPNManager:
         """连接到指定服务器"""
         try:
             self.last_error = None
+
+            tun_ok, tun_error = self.check_tun_ready()
+            if not tun_ok:
+                self.last_error = tun_error
+                print(self.last_error)
+                return False
+
             # 先断开现有连接
             self.disconnect()
             
@@ -260,6 +305,11 @@ class VPNManager:
                     stderr = (result.stderr or '').strip()
                     stdout = (result.stdout or '').strip()
                     err_msg = stderr or stdout or 'unknown error'
+                    if 'Error code: 31' in err_msg:
+                        err_msg = (
+                            'NicCreate 失败（Error code: 31），通常是容器无法访问 TUN/TAP。'
+                            '请确认使用 Linux 内核并启用 /dev/net/tun 与特权权限。'
+                        )
                     self.last_error = f"vpncmd 失败: {err_msg}"
                     print(f"命令执行失败: {' '.join(cmd)}")
                     print(f"错误: {err_msg}")

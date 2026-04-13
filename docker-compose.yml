@@ -4,6 +4,7 @@ services:
   vpngate-socks:
     build: .
     container_name: vpngate-socks5-web
+    privileged: true
     cap_add:
       - NET_ADMIN
     devices:
@@ -16,6 +17,7 @@ services:
       - SOCKS_PASSWORD=${SOCKS_PASSWORD:-change_me_now}
       - WEB_USERNAME=${WEB_USERNAME:-admin}
       - WEB_PASSWORD=${WEB_PASSWORD:-admin_change_me}
+      - WEB_SESSION_SECRET=${WEB_SESSION_SECRET:-change_this_session_secret}
     volumes:
       - ./config:/config  # 持久化配置
     restart: unless-stopped

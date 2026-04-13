@@ -81,6 +81,7 @@
             display: flex;
             gap: 10px;
             margin-top: 20px;
+            flex-wrap: wrap;
         }
 
         .btn {
@@ -109,6 +110,15 @@
 
         .btn-danger:hover {
             background: #c82333;
+        }
+
+        .btn-secondary {
+            background: #475569;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #334155;
         }
 
         .btn:disabled {
@@ -300,6 +310,45 @@
             margin-bottom: 10px;
             color: #333;
         }
+
+        .message-box {
+            margin-top: 16px;
+            border-radius: 8px;
+            padding: 12px 14px;
+            display: none;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.45;
+            border: 1px solid transparent;
+        }
+
+        .message-box.success {
+            display: block;
+            background: #dcfce7;
+            border-color: #86efac;
+            color: #14532d;
+        }
+
+        .message-box.error {
+            display: block;
+            background: #fee2e2;
+            border-color: #fecaca;
+            color: #7f1d1d;
+        }
+
+        .message-actions {
+            margin-top: 8px;
+        }
+
+        .copy-btn {
+            background: #0f172a;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -317,7 +366,10 @@
             <div class="controls">
                 <button class="btn btn-primary" onclick="refreshServers()">🔄 刷新服务器列表</button>
                 <button class="btn btn-danger" id="disconnectBtn" onclick="disconnect()" disabled>❌ 断开连接</button>
+                <button class="btn btn-secondary" onclick="logout()">🚪 退出登录</button>
             </div>
+
+            <div id="messageBox" class="message-box"></div>
         </div>
 
         <div class="filters">
@@ -353,6 +405,7 @@
     <script>
         let allServers = [];
         let currentConnection = null;
+        let lastErrorText = '';
 
         // 国家代码到 emoji 旗帜的映射
         const countryFlags = {
@@ -382,10 +435,40 @@
             return gb.toFixed(1) + ' GB';
         }
 
+        function showMessage(type, text, details = '') {
+            const box = document.getElementById('messageBox');
+            const detailText = details ? `\n\n详情:\n${details}` : '';
+            const fullText = `${text}${detailText}`;
+            lastErrorText = fullText;
+
+            box.className = `message-box ${type}`;
+            box.innerHTML = `
+                <div>${fullText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div class="message-actions">
+                    <button class="copy-btn" onclick="copyLastMessage()">复制信息</button>
+                </div>
+            `;
+        }
+
+        async function copyLastMessage() {
+            if (!lastErrorText) return;
+            try {
+                await navigator.clipboard.writeText(lastErrorText);
+                const old = lastErrorText;
+                showMessage('success', '已复制到剪贴板', old);
+            } catch (e) {
+                showMessage('error', '复制失败，请手动选中文本复制', String(e));
+            }
+        }
+
         async function loadServers() {
             try {
                 console.log('开始加载服务器列表...');
                 const response = await fetch('/api/servers');
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
                 console.log('API 响应状态:', response.status);
                 
                 const data = await response.json();
@@ -433,10 +516,14 @@
         async function testAPI() {
             try {
                 const response = await fetch('/api/test');
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
                 const data = await response.json();
-                alert('API 测试结果:\n' + JSON.stringify(data, null, 2));
+                showMessage('success', 'API 测试完成', JSON.stringify(data, null, 2));
             } catch (error) {
-                alert('API 测试失败: ' + error.message);
+                showMessage('error', 'API 测试失败', error.message);
             }
         }
 
@@ -538,18 +625,22 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ ip, port })
                 });
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
                 
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('✅ 连接成功！SOCKS5 代理已启动在 localhost:1080');
+                    showMessage('success', '连接成功，SOCKS5 代理已启动在 localhost:1080');
                     await updateStatus();
                 } else {
-                    alert('❌ 连接失败: ' + (data.error || '未知错误'));
+                    showMessage('error', '连接失败', data.error || data.message || '未知错误');
                 }
             } catch (error) {
                 console.error('连接失败:', error);
-                alert('❌ 连接失败，请重试');
+                showMessage('error', '连接失败，请重试', error.message);
             }
         }
 
@@ -558,21 +649,32 @@
                 const response = await fetch('/api/disconnect', {
                     method: 'POST'
                 });
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
                 
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('✅ 已断开连接');
+                    showMessage('success', '已断开连接');
                     await updateStatus();
+                } else {
+                    showMessage('error', '断开失败', data.error || data.message || '未知错误');
                 }
             } catch (error) {
                 console.error('断开失败:', error);
+                showMessage('error', '断开失败', error.message);
             }
         }
 
         async function updateStatus() {
             try {
                 const response = await fetch('/api/status');
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
                 const data = await response.json();
                 
                 if (data.success) {
@@ -608,6 +710,10 @@
                 </div>
             `;
             loadServers();
+        }
+
+        function logout() {
+            window.location.href = '/logout';
         }
 
         // 初始化
