@@ -61,9 +61,8 @@ cd /opt/vpnclient
 # 等待 VPN 客户端启动
 sleep 3
 
-# 启动 SOCKS5 代理服务器（初始状态，等待连接后会重启）
-echo "启动 SOCKS5 代理服务器..."
-danted -f /etc/danted.conf &
+# 启动 SOCKS5 代理服务器（等待 VPN 连接后由 Web API 启动）
+echo "等待 VPN 连接后启动 SOCKS5 代理服务器..."
 
 # 启动 Web 管理界面
 echo "启动 Web 管理界面..."

@@ -47,7 +47,17 @@ def require_web_auth():
 class VPNManager:
     def __init__(self):
         self.current_connection = None
+        self.last_error = None
         self.load_config()
+
+    def interface_exists(self, interface_name):
+        """检查网卡是否存在"""
+        result = subprocess.run(
+            ['ip', 'link', 'show', interface_name],
+            capture_output=True,
+            text=True
+        )
+        return result.returncode == 0
     
     def load_config(self):
         """加载配置"""
@@ -213,6 +223,7 @@ class VPNManager:
     def connect(self, server_ip, server_port=443):
         """连接到指定服务器"""
         try:
+            self.last_error = None
             # 先断开现有连接
             self.disconnect()
             
@@ -239,16 +250,30 @@ class VPNManager:
                  'AccountConnect', 'vpngate']
             ]
             
-            for cmd in commands:
-                result = subprocess.run(cmd, capture_output=True, timeout=10)
+            for idx, cmd in enumerate(commands):
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                # 第一个命令 NicDelete 在首次连接时失败是正常情况
+                if idx == 0 and result.returncode != 0:
+                    continue
+
                 if result.returncode != 0:
+                    stderr = (result.stderr or '').strip()
+                    stdout = (result.stdout or '').strip()
+                    err_msg = stderr or stdout or 'unknown error'
+                    self.last_error = f"vpncmd 失败: {err_msg}"
                     print(f"命令执行失败: {' '.join(cmd)}")
-                    print(f"错误: {result.stderr.decode()}")
+                    print(f"错误: {err_msg}")
+                    return False
             
             # 等待连接建立
             import time
             time.sleep(5)
             
+            if not self.interface_exists('vpn_vpn'):
+                self.last_error = 'VPN 虚拟网卡 vpn_vpn 未建立，连接可能未成功'
+                print(self.last_error)
+                return False
+
             # 配置网卡（镜像里通常是 dhcpcd5，不一定有 dhclient）
             if shutil.which('dhclient'):
                 subprocess.run(['dhclient', 'vpn_vpn'], timeout=15)
@@ -268,10 +293,12 @@ class VPNManager:
                 'connected_at': datetime.now().isoformat()
             }
             self.save_config()
+            self.last_error = None
             
             return True
         
         except Exception as e:
+            self.last_error = str(e)
             print(f"连接失败: {e}")
             return False
 
@@ -337,7 +364,8 @@ def connect():
     
     return jsonify({
         'success': success,
-        'message': '连接成功' if success else '连接失败'
+        'message': '连接成功' if success else '连接失败',
+        'error': None if success else vpn_manager.last_error
     })
 
 @app.route('/api/disconnect', methods=['POST'])
