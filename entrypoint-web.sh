@@ -15,6 +15,19 @@ export WEB_PASSWORD
 echo "配置 SOCKS5 认证用户: ${SOCKS_USERNAME}"
 echo "配置 Web 管理用户: ${WEB_USERNAME}"
 
+# 尝试准备 TUN 设备（部分环境不会自动挂载 /dev/net/tun）
+if [ ! -c /dev/net/tun ]; then
+    mkdir -p /dev/net || true
+    mknod /dev/net/tun c 10 200 2>/dev/null || true
+    chmod 666 /dev/net/tun 2>/dev/null || true
+fi
+
+if [ -c /dev/net/tun ]; then
+    echo "TUN 设备已就绪: /dev/net/tun"
+else
+    echo "警告: 未检测到 /dev/net/tun，VPN 连接功能将不可用"
+fi
+
 # 创建/更新 SOCKS5 系统用户（供 danted 的 username 认证使用）
 if ! id -u "${SOCKS_USERNAME}" > /dev/null 2>&1; then
     useradd -M -s /usr/sbin/nologin "${SOCKS_USERNAME}"

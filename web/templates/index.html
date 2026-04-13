@@ -453,9 +453,24 @@
         async function copyLastMessage() {
             if (!lastErrorText) return;
             try {
-                await navigator.clipboard.writeText(lastErrorText);
-                const old = lastErrorText;
-                showMessage('success', '已复制到剪贴板', old);
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(lastErrorText);
+                } else {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = lastErrorText;
+                    textarea.setAttribute('readonly', '');
+                    textarea.style.position = 'fixed';
+                    textarea.style.left = '-9999px';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    if (!ok) {
+                        throw new Error('execCommand copy failed');
+                    }
+                }
+
+                showMessage('success', '已复制到剪贴板');
             } catch (e) {
                 showMessage('error', '复制失败，请手动选中文本复制', String(e));
             }

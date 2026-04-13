@@ -90,7 +90,10 @@ class VPNManager:
         """检查 TUN 设备是否可用"""
         tun_path = '/dev/net/tun'
         if not os.path.exists(tun_path):
-            return False, '容器内缺少 /dev/net/tun，无法创建 SoftEther 虚拟网卡'
+            return False, (
+                '容器内缺少 /dev/net/tun，无法创建 SoftEther 虚拟网卡。'
+                '通常需要在原生 Linux/支持 TUN 的环境运行（Windows Docker Desktop 常见此问题）。'
+            )
 
         if not os.access(tun_path, os.R_OK | os.W_OK):
             return False, '容器对 /dev/net/tun 没有读写权限，请检查 Docker 权限配置'
