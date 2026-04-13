@@ -9,6 +9,7 @@ import subprocess
 import os
 import json
 import shutil
+import time
 from datetime import datetime
 
 app = Flask(__name__)
@@ -260,6 +261,30 @@ class VPNManager:
         except Exception as e:
             print(f"断开连接失败: {e}")
             return False
+
+    def start_socks_proxy(self):
+        """启动 SOCKS5 代理（非阻塞）"""
+        try:
+            if shutil.which('pkill'):
+                subprocess.run(['pkill', '-9', 'danted'], timeout=5)
+
+            proc = subprocess.Popen(
+                ['danted', '-f', '/etc/danted.conf'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            time.sleep(1)
+
+            if proc.poll() is not None:
+                stderr = (proc.stderr.read() or '').strip() if proc.stderr else ''
+                stdout = (proc.stdout.read() or '').strip() if proc.stdout else ''
+                err_msg = stderr or stdout or 'danted 启动失败'
+                return False, err_msg
+
+            return True, None
+        except Exception as e:
+            return False, str(e)
     
     def connect(self, server_ip, server_port=443):
         """连接到指定服务器"""
@@ -319,7 +344,6 @@ class VPNManager:
                     return False
             
             # 等待连接建立
-            import time
             time.sleep(5)
             
             if not self.interface_exists('vpn_vpn'):
@@ -335,10 +359,12 @@ class VPNManager:
             else:
                 print("警告: 未找到 dhclient/dhcpcd，跳过网卡 DHCP 配置")
             
-            # 重启 SOCKS5 代理
-            if shutil.which('pkill'):
-                subprocess.run(['pkill', '-9', 'danted'], timeout=5)
-            subprocess.run(['danted', '-f', '/etc/danted.conf'], timeout=5)
+            # 重启 SOCKS5 代理（避免前台进程阻塞导致超时）
+            socks_ok, socks_error = self.start_socks_proxy()
+            if not socks_ok:
+                self.last_error = f'SOCKS5 启动失败: {socks_error}'
+                print(self.last_error)
+                return False
             
             self.current_connection = {
                 'ip': server_ip,
