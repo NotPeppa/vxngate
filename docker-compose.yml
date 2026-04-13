@@ -11,6 +11,11 @@ services:
     ports:
       - "1080:1080"  # SOCKS5 代理端口
       - "5000:5000"  # Web 管理界面端口
+    environment:
+      - SOCKS_USERNAME=${SOCKS_USERNAME:-socks}
+      - SOCKS_PASSWORD=${SOCKS_PASSWORD:-change_me_now}
+      - WEB_USERNAME=${WEB_USERNAME:-admin}
+      - WEB_PASSWORD=${WEB_PASSWORD:-admin_change_me}
     volumes:
       - ./config:/config  # 持久化配置
     restart: unless-stopped

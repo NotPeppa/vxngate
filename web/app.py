@@ -2,7 +2,7 @@
 """
 VPN Gate SOCKS5 代理管理 Web 界面
 """
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
 import requests
 import csv
 import subprocess
@@ -16,6 +16,33 @@ app = Flask(__name__)
 # 配置文件路径
 CONFIG_FILE = '/config/vpn_config.json'
 VPN_CLIENT_PATH = '/opt/vpnclient'
+
+
+def check_web_auth():
+    """检查 Web 访问认证（通过环境变量开启）"""
+    web_password = os.environ.get('WEB_PASSWORD')
+    if not web_password:
+        return True
+
+    web_username = os.environ.get('WEB_USERNAME', 'admin')
+    auth = request.authorization
+    if not auth:
+        return False
+
+    return auth.username == web_username and auth.password == web_password
+
+
+@app.before_request
+def require_web_auth():
+    """为全部页面和 API 增加基础认证"""
+    if check_web_auth():
+        return None
+
+    return Response(
+        'Authentication required',
+        401,
+        {'WWW-Authenticate': 'Basic realm="VPN Gate Admin"'}
+    )
 
 class VPNManager:
     def __init__(self):
