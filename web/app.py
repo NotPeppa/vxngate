@@ -447,6 +447,113 @@ class VPNManager:
             return True, None
         except Exception as e:
             return False, str(e)
+
+    def verify_socks_proxy(self):
+        """校验本地 SOCKS5 代理是否可实际转发"""
+        username = os.environ.get('SOCKS_USERNAME', 'socks')
+        password = os.environ.get('SOCKS_PASSWORD', 'change_me_now')
+
+        # 使用 IP 目标避免 DNS 干扰
+        targets = [
+            ('1.1.1.1', 443),
+            ('8.8.8.8', 53),
+            ('9.9.9.9', 53),
+        ]
+
+        rep_map = {
+            1: 'general SOCKS server failure',
+            2: 'connection not allowed by ruleset',
+            3: 'network unreachable',
+            4: 'host unreachable',
+            5: 'connection refused',
+            6: 'TTL expired',
+            7: 'command not supported',
+            8: 'address type not supported',
+        }
+
+        def recv_exact(sock, n):
+            data = b''
+            while len(data) < n:
+                chunk = sock.recv(n - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            return data
+
+        last_error = None
+        for host, port in targets:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(8)
+            try:
+                sock.connect(('127.0.0.1', 1080))
+
+                # greeting: 支持 no-auth 和 username
+                sock.sendall(b'\x05\x02\x00\x02')
+                greeting_resp = recv_exact(sock, 2)
+                if len(greeting_resp) != 2 or greeting_resp[0] != 5:
+                    last_error = 'SOCKS5 greeting 响应异常'
+                    continue
+
+                method = greeting_resp[1]
+                if method == 0xFF:
+                    last_error = 'SOCKS5 不接受客户端认证方式'
+                    continue
+
+                if method == 0x02:
+                    u = username.encode('utf-8')
+                    p = password.encode('utf-8')
+                    if len(u) > 255 or len(p) > 255:
+                        last_error = 'SOCKS 认证凭据长度超过 255 字节'
+                        continue
+
+                    auth_req = bytes([1, len(u)]) + u + bytes([len(p)]) + p
+                    sock.sendall(auth_req)
+                    auth_resp = recv_exact(sock, 2)
+                    if len(auth_resp) != 2 or auth_resp[1] != 0:
+                        last_error = 'SOCKS5 用户名密码认证失败'
+                        continue
+                elif method != 0x00:
+                    last_error = f'SOCKS5 返回不支持的认证方式: {method}'
+                    continue
+
+                octets = bytes(int(part) for part in host.split('.'))
+                req = b'\x05\x01\x00\x01' + octets + port.to_bytes(2, 'big')
+                sock.sendall(req)
+
+                head = recv_exact(sock, 4)
+                if len(head) != 4 or head[0] != 5:
+                    last_error = f'{host}:{port} CONNECT 响应异常'
+                    continue
+
+                rep = head[1]
+                atyp = head[3]
+                if rep != 0:
+                    rep_msg = rep_map.get(rep, f'unknown({rep})')
+                    last_error = f'{host}:{port} CONNECT 失败: {rep_msg}'
+                    continue
+
+                # 吃掉 BND.ADDR/BND.PORT
+                if atyp == 1:
+                    recv_exact(sock, 6)
+                elif atyp == 4:
+                    recv_exact(sock, 18)
+                elif atyp == 3:
+                    ln = recv_exact(sock, 1)
+                    if len(ln) != 1:
+                        last_error = f'{host}:{port} 响应解析失败'
+                        continue
+                    recv_exact(sock, ln[0] + 2)
+
+                return True, None
+            except Exception as e:
+                last_error = f'{host}:{port} 探测异常: {e}'
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        return False, last_error or 'SOCKS5 可用性校验失败'
     
     def connect(self, server_ip, server_port=443):
         """连接到指定服务器"""
@@ -580,6 +687,12 @@ class VPNManager:
                 self.last_error = f'SOCKS5 启动失败: {socks_error}'
                 print(self.last_error)
                 return False
+
+            socks_ready, socks_ready_error = self.verify_socks_proxy()
+            if not socks_ready:
+                self.last_error = f'SOCKS5 可用性校验失败: {socks_ready_error}'
+                print(self.last_error)
+                return False
             
             self.current_connection = {
                 'ip': server_ip,
@@ -588,6 +701,7 @@ class VPNManager:
             }
             self.save_config()
             self.last_error = None
+            self.last_warning = None
             
             return True
         
