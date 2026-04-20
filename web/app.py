@@ -12,8 +12,8 @@ import shutil
 import time
 import re
 import socket
+import ssl
 from datetime import datetime
-from requests.adapters import HTTPAdapter
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('WEB_SESSION_SECRET', 'dev-change-this-secret')
@@ -137,7 +137,7 @@ class VPNManager:
         return 'Unknown', output.strip()
 
     def probe_vpn_egress(self, source_ip):
-        """真实出网探测：绑定 VPN 网卡 IP 发起 HTTPS 请求"""
+        """真实出网探测：绑定 VPN 网卡 IP 发起 IPv4 出站请求"""
         def tcp_probe(host, port):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
@@ -153,6 +153,49 @@ class VPNManager:
                 except Exception:
                     pass
 
+        def http_probe(host, port=80, path='/', use_tls=False):
+            request_data = (
+                f'GET {path} HTTP/1.1\r\n'
+                f'Host: {host}\r\n'
+                'User-Agent: vpngate-egress-probe/1.0\r\n'
+                'Connection: close\r\n\r\n'
+            ).encode('ascii')
+
+            try:
+                addr_infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+            except Exception as e:
+                return False, f'{host}:{port} IPv4 解析失败: {e}'
+
+            last_err = None
+            for family, socktype, proto, _, sockaddr in addr_infos:
+                sock = socket.socket(family, socktype, proto)
+                sock.settimeout(8)
+                try:
+                    sock.bind((source_ip, 0))
+                    sock.connect(sockaddr)
+
+                    conn = sock
+                    if use_tls:
+                        context = ssl.create_default_context()
+                        conn = context.wrap_socket(sock, server_hostname=host)
+
+                    conn.sendall(request_data)
+                    response = conn.recv(256)
+                    if b' 200 ' in response or b' 204 ' in response:
+                        return True, None
+
+                    first_line = response.splitlines()[0].decode('ascii', errors='ignore') if response else '空响应'
+                    last_err = f'{host}:{port} 返回异常: {first_line}'
+                except Exception as e:
+                    last_err = f'{host}:{port} 请求失败: {e}'
+                finally:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+
+            return False, last_err or f'{host}:{port} 请求失败'
+
         tcp_targets = [
             ('1.1.1.1', 443),
             ('8.8.8.8', 53),
@@ -166,36 +209,28 @@ class VPNManager:
                 return True, None
             tcp_last_error = f'{host}:{port} 连接失败: {err}'
 
-        # 如果 TCP 探测全部失败，再尝试 HTTPS 探测（更严格）
-        class SourceAddressAdapter(HTTPAdapter):
-            def __init__(self, bind_ip, **kwargs):
-                self.bind_ip = bind_ip
-                super().__init__(**kwargs)
-
-            def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-                pool_kwargs['source_address'] = (self.bind_ip, 0)
-                return super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
-
-        session = requests.Session()
-        session.mount('http://', SourceAddressAdapter(source_ip))
-        session.mount('https://', SourceAddressAdapter(source_ip))
-
-        probe_urls = [
-            'https://ipv4.ip.sb',
-            'https://api.ipify.org'
+        probe_targets = [
+            ('ipv4.ip.sb', 443, '/', True),
+            ('api.ipify.org', 443, '/', True),
+            ('ipv4.ip.sb', 80, '/', False),
+            ('api.ipify.org', 80, '/', False),
         ]
 
-        last_error = None
-        for url in probe_urls:
-            try:
-                resp = session.get(url, timeout=8)
-                if resp.status_code == 200 and resp.text.strip():
-                    return True, None
-                last_error = f'{url} 返回状态码 {resp.status_code}'
-            except Exception as e:
-                last_error = f'{url} 请求失败: {e}'
+        http_errors = []
+        for host, port, path, use_tls in probe_targets:
+            ok, err = http_probe(host, port=port, path=path, use_tls=use_tls)
+            if ok:
+                return True, None
+            if err:
+                http_errors.append(err)
 
-        return False, last_error or tcp_last_error or '出网探测失败'
+        error_parts = []
+        if tcp_last_error:
+            error_parts.append(f'TCP 探测失败: {tcp_last_error}')
+        if http_errors:
+            error_parts.append(f'HTTP 探测失败: {http_errors[-1]}')
+
+        return False, '；'.join(error_parts) or '出网探测失败'
 
     def check_tun_ready(self):
         """检查 TUN 设备是否可用"""
