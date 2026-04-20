@@ -79,7 +79,18 @@ class VPNManager:
     def __init__(self):
         self.current_connection = None
         self.last_error = None
+        self.last_warning = None
         self.load_config()
+
+    def _bind_socket_to_vpn(self, sock):
+        """尽量将 socket 绑定到 VPN 网卡，避免走错路由"""
+        bind_opt = getattr(socket, 'SO_BINDTODEVICE', None)
+        if bind_opt is None:
+            return
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, bind_opt, b'vpn_vpn\0')
+        except Exception:
+            pass
 
     def interface_exists(self, interface_name):
         """检查网卡是否存在"""
@@ -142,6 +153,7 @@ class VPNManager:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             try:
+                self._bind_socket_to_vpn(sock)
                 sock.bind((source_ip, 0))
                 sock.connect((host, port))
                 return True, None
@@ -171,6 +183,7 @@ class VPNManager:
                 sock = socket.socket(family, socktype, proto)
                 sock.settimeout(8)
                 try:
+                    self._bind_socket_to_vpn(sock)
                     sock.bind((source_ip, 0))
                     sock.connect(sockaddr)
 
@@ -439,6 +452,7 @@ class VPNManager:
         """连接到指定服务器"""
         try:
             self.last_error = None
+            self.last_warning = None
 
             tun_ok, tun_error = self.check_tun_ready()
             if not tun_ok:
@@ -551,9 +565,14 @@ class VPNManager:
 
             probe_ok, probe_error = self.probe_vpn_egress(vpn_ip)
             if not probe_ok:
-                self.last_error = f'VPN 真实出网探测失败: {probe_error}'
-                print(self.last_error)
-                return False
+                probe_strict = os.environ.get('REQUIRE_EGRESS_PROBE', '0').lower() in ('1', 'true', 'yes', 'on')
+                msg = f'VPN 真实出网探测失败: {probe_error}'
+                if probe_strict:
+                    self.last_error = msg
+                    print(self.last_error)
+                    return False
+                self.last_warning = msg
+                print(f'警告: {msg}（已跳过严格校验，继续启动 SOCKS5）')
             
             # 重启 SOCKS5 代理（避免前台进程阻塞导致超时）
             socks_ok, socks_error = self.start_socks_proxy()
