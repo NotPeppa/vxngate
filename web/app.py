@@ -453,11 +453,11 @@ class VPNManager:
         username = os.environ.get('SOCKS_USERNAME', 'socks')
         password = os.environ.get('SOCKS_PASSWORD', 'change_me_now')
 
-        # 使用 IP 目标避免 DNS 干扰
+        # 同时测试域名与 IP，避免单一目标导致误判
         targets = [
-            ('1.1.1.1', 443),
-            ('8.8.8.8', 53),
-            ('9.9.9.9', 53),
+            ('api.ipify.org', 443, True),
+            ('ipv4.ip.sb', 443, True),
+            ('1.1.1.1', 443, False),
         ]
 
         rep_map = {
@@ -480,10 +480,10 @@ class VPNManager:
                 data += chunk
             return data
 
-        last_error = None
-        for host, port in targets:
+        errors = []
+        for host, port, is_domain in targets:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(8)
+            sock.settimeout(6)
             try:
                 sock.connect(('127.0.0.1', 1080))
 
@@ -516,8 +516,15 @@ class VPNManager:
                     last_error = f'SOCKS5 返回不支持的认证方式: {method}'
                     continue
 
-                octets = bytes(int(part) for part in host.split('.'))
-                req = b'\x05\x01\x00\x01' + octets + port.to_bytes(2, 'big')
+                if is_domain:
+                    host_bytes = host.encode('idna')
+                    if len(host_bytes) > 255:
+                        errors.append(f'{host}:{port} 域名长度超过 255 字节')
+                        continue
+                    req = b'\x05\x01\x00\x03' + bytes([len(host_bytes)]) + host_bytes + port.to_bytes(2, 'big')
+                else:
+                    octets = bytes(int(part) for part in host.split('.'))
+                    req = b'\x05\x01\x00\x01' + octets + port.to_bytes(2, 'big')
                 sock.sendall(req)
 
                 head = recv_exact(sock, 4)
@@ -529,7 +536,7 @@ class VPNManager:
                 atyp = head[3]
                 if rep != 0:
                     rep_msg = rep_map.get(rep, f'unknown({rep})')
-                    last_error = f'{host}:{port} CONNECT 失败: {rep_msg}'
+                    errors.append(f'{host}:{port} CONNECT 失败: {rep_msg}')
                     continue
 
                 # 吃掉 BND.ADDR/BND.PORT
@@ -540,20 +547,22 @@ class VPNManager:
                 elif atyp == 3:
                     ln = recv_exact(sock, 1)
                     if len(ln) != 1:
-                        last_error = f'{host}:{port} 响应解析失败'
+                        errors.append(f'{host}:{port} 响应解析失败')
                         continue
                     recv_exact(sock, ln[0] + 2)
 
                 return True, None
             except Exception as e:
-                last_error = f'{host}:{port} 探测异常: {e}'
+                errors.append(f'{host}:{port} 探测异常: {e}')
             finally:
                 try:
                     sock.close()
                 except Exception:
                     pass
 
-        return False, last_error or 'SOCKS5 可用性校验失败'
+        if errors:
+            return False, '；'.join(errors)
+        return False, 'SOCKS5 可用性校验失败'
     
     def connect(self, server_ip, server_port=443):
         """连接到指定服务器"""
