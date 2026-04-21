@@ -518,10 +518,11 @@
             }
         }
 
-        async function loadServers() {
+        async function loadServers(force = false) {
             try {
-                console.log('开始加载服务器列表...');
-                const response = await fetch('/api/servers');
+                console.log('开始加载服务器列表...', force ? '(强制刷新)' : '(使用缓存)');
+                const url = force ? '/api/servers?force=1' : '/api/servers';
+                const response = await fetch(url);
                 if (response.status === 401) {
                     window.location.href = '/login';
                     return;
@@ -766,7 +767,7 @@
                     正在刷新服务器列表...
                 </div>
             `;
-            loadServers();
+            loadServers(true);
         }
 
         function logout() {

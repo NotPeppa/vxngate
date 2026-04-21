@@ -80,6 +80,8 @@ class VPNManager:
         self.current_connection = None
         self.last_error = None
         self.last_warning = None
+        self.servers_cache = None
+        self.servers_cache_at = None
         self.load_config()
 
     def _bind_socket_to_vpn(self, sock):
@@ -146,6 +148,136 @@ class VPNManager:
                 return 'Disconnected', output.strip()
 
         return 'Unknown', output.strip()
+
+    def wait_for_session_connected(self, timeout=25, poll_interval=2):
+        """轮询 SoftEther 会话状态，直到 Connected 或超时"""
+        deadline = time.time() + timeout
+        last_status = 'Unknown'
+        last_detail = None
+        while True:
+            status, detail = self.get_account_session_status()
+            last_status = status
+            last_detail = detail
+            if status == 'Connected':
+                return True, status, None
+            if time.time() >= deadline:
+                return False, last_status, last_detail
+            time.sleep(poll_interval)
+
+    def get_packet_stats(self):
+        """解析 AccountStatusGet 的收发包计数，用于 DHCP 诊断"""
+        try:
+            result = subprocess.run(
+                [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 'AccountStatusGet', 'vpngate'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+        except Exception:
+            return {}
+
+        output = result.stdout or ''
+        stats = {}
+        patterns = {
+            'out_bcast': r'Outgoing Broadcast Packets\s*\|\s*([\d,]+)',
+            'in_bcast': r'Incoming Broadcast Packets\s*\|\s*([\d,]+)',
+            'out_unicast': r'Outgoing Unicast Packets\s*\|\s*([\d,]+)',
+            'in_unicast': r'Incoming Unicast Packets\s*\|\s*([\d,]+)',
+        }
+        for key, pattern in patterns.items():
+            match = re.search(pattern, output)
+            if match:
+                try:
+                    stats[key] = int(match.group(1).replace(',', ''))
+                except ValueError:
+                    pass
+        return stats
+
+    def _flush_interface_ipv4(self, interface):
+        """清空接口上已分配的 IPv4 地址，便于 DHCP 重试"""
+        try:
+            subprocess.run(
+                ['ip', '-4', 'addr', 'flush', 'dev', interface],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+        except Exception:
+            pass
+
+    def run_dhcp(self, interface='vpn_vpn', attempts=3, per_attempt_timeout=10):
+        """
+        运行 DHCP，最多重试若干次。
+        关键点：
+          - udhcpc 优先（行为简单、不做 APIPA 回落）
+          - dhcpcd 加 -L 禁用 IPv4LL，避免 DHCP 失败时静默分配 169.254
+          - 每次重试前先清空接口地址，避免前次 169.254 残留误导判断
+        """
+        def build_cmd():
+            if shutil.which('udhcpc'):
+                return [
+                    'udhcpc',
+                    '-i', interface,
+                    '-n',
+                    '-q',
+                    '-t', '3',
+                    '-T', '2',
+                    '-f',
+                ]
+            if shutil.which('dhcpcd'):
+                return [
+                    'dhcpcd',
+                    '-B',
+                    '-4',
+                    '-L',
+                    '-t', str(per_attempt_timeout),
+                    interface,
+                ]
+            if shutil.which('dhclient'):
+                return ['dhclient', '-1', '-v', interface]
+            return None
+
+        cmd = build_cmd()
+        if cmd is None:
+            return False, '未安装 udhcpc/dhcpcd/dhclient，无法执行 DHCP'
+
+        dhcp_tool = cmd[0]
+        last_error = None
+
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                self._flush_interface_ipv4(interface)
+                time.sleep(1)
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=per_attempt_timeout + 5,
+                )
+                stderr = (result.stderr or '').strip()
+                stdout = (result.stdout or '').strip()
+
+                if result.returncode == 0:
+                    ip = self.get_interface_ipv4(interface)
+                    if ip and not ip.startswith('169.254.'):
+                        return True, None
+                    last_error = (
+                        f'[{dhcp_tool} 第 {attempt}/{attempts} 次] '
+                        f'命令返回成功但未拿到有效 IP（当前: {ip or "无"}）'
+                    )
+                else:
+                    err_detail = stderr or stdout or f'exit {result.returncode}'
+                    last_error = f'[{dhcp_tool} 第 {attempt}/{attempts} 次] 失败: {err_detail}'
+            except subprocess.TimeoutExpired:
+                last_error = f'[{dhcp_tool} 第 {attempt}/{attempts} 次] 执行超时（>{per_attempt_timeout + 5}s）'
+            except Exception as e:
+                last_error = f'[{dhcp_tool} 第 {attempt}/{attempts} 次] 异常: {e}'
+
+            print(last_error)
+
+        return False, last_error or f'{dhcp_tool} 尝试 {attempts} 次均失败'
 
     def probe_vpn_egress(self, source_ip):
         """真实出网探测：绑定 VPN 网卡 IP 发起 IPv4 出站请求"""
@@ -622,60 +754,75 @@ class VPNManager:
                     print(f"错误: {err_msg}")
                     return False
             
-            # 等待连接建立
-            time.sleep(5)
-            
+            # 等待 VPN 会话建立（先确认隧道真的通了，再做 DHCP）
             if not self.interface_exists('vpn_vpn'):
                 self.last_error = 'VPN 虚拟网卡 vpn_vpn 未建立，连接可能未成功'
                 print(self.last_error)
                 return False
 
-            # 配置网卡（镜像里通常是 dhcpcd5，不一定有 dhclient）
-            if shutil.which('dhclient'):
-                dhcp_result = subprocess.run(
-                    ['dhclient', 'vpn_vpn'],
-                    capture_output=True,
-                    text=True,
-                    timeout=20
-                )
-            elif shutil.which('dhcpcd'):
-                dhcp_result = subprocess.run(
-                    ['dhcpcd', 'vpn_vpn'],
-                    capture_output=True,
-                    text=True,
-                    timeout=20
-                )
-            else:
-                print("警告: 未找到 dhclient/dhcpcd，跳过网卡 DHCP 配置")
-                dhcp_result = None
-
-            if dhcp_result is not None and dhcp_result.returncode != 0:
-                err_msg = (dhcp_result.stderr or dhcp_result.stdout or '').strip() or 'DHCP 配置失败'
-                self.last_error = f'VPN 网卡配置失败: {err_msg}'
+            session_ok, session_status, session_detail = self.wait_for_session_connected(timeout=25)
+            if not session_ok:
+                if session_status == 'Retrying':
+                    self.last_error = (
+                        f'无法连接到 VPN 服务器 {server_ip}（Session: Retrying）。\n'
+                        f'该节点可能离线、已满员，或网络不通。请尝试其他服务器。'
+                    )
+                elif session_status == 'Disconnected':
+                    self.last_error = (
+                        f'VPN 会话已断开（Session: Disconnected）。\n'
+                        f'服务器 {server_ip} 拒绝连接或立即断开，请尝试其他服务器。'
+                    )
+                else:
+                    self.last_error = (
+                        f'VPN 会话未在规定时间内建立（Session: {session_status}，25s 超时）。\n'
+                        f'服务器 {server_ip} 响应过慢或不稳定，请尝试其他服务器。'
+                    )
+                if session_detail:
+                    self.last_error += f'\n---\n{session_detail}'
                 print(self.last_error)
                 return False
 
-            if not self.interface_has_ipv4('vpn_vpn'):
-                self.last_error = 'VPN 虚拟网卡已创建但未获取到 IPv4 地址，无法转发流量'
-                print(self.last_error)
-                return False
+            # Session 已 Connected，开始 DHCP（带重试 & 诊断）
+            dhcp_ok, dhcp_error = self.run_dhcp('vpn_vpn', attempts=3, per_attempt_timeout=10)
 
             vpn_ip = self.get_interface_ipv4('vpn_vpn')
-            if not vpn_ip:
-                self.last_error = '无法读取 VPN 虚拟网卡 IPv4 地址'
-                print(self.last_error)
-                return False
 
-            if vpn_ip.startswith('169.254.'):
-                self.last_error = 'VPN 虚拟网卡只拿到链路本地地址(169.254.x.x)，VPN 实际未连通'
-                print(self.last_error)
-                return False
+            if (not dhcp_ok) or (not vpn_ip) or vpn_ip.startswith('169.254.'):
+                stats = self.get_packet_stats()
+                out_bcast = stats.get('out_bcast')
+                in_bcast = stats.get('in_bcast')
 
-            session_status, session_output = self.get_account_session_status()
-            if session_status != 'Connected':
-                self.last_error = f'VPN 会话未建立，当前状态: {session_status}'
-                if session_output:
-                    self.last_error += f'\n{session_output}'
+                if out_bcast is not None and in_bcast is not None:
+                    if out_bcast > 0 and in_bcast <= 4:
+                        reason = (
+                            '该节点 HUB 未响应 DHCP 请求（SecureNAT/DHCP 未配置或故障）'
+                        )
+                        suggestion = '请尝试其他服务器'
+                    elif out_bcast == 0:
+                        reason = '本地未发出任何广播包（容器 TUN/TAP 或 vpnclient 异常）'
+                        suggestion = '请检查 /dev/net/tun 和容器特权权限'
+                    else:
+                        reason = '已收到部分广播但未完成 DHCP 握手'
+                        suggestion = '可重试或更换服务器'
+                    packet_info = f'广播包 {out_bcast} 出 / {in_bcast} 入'
+                else:
+                    reason = '无法获取隧道数据包统计'
+                    suggestion = '请尝试其他服务器'
+                    packet_info = None
+
+                current_ip = vpn_ip or '无'
+                diag_lines = [
+                    f'VPN 隧道已建立（Session: Connected，Server: {server_ip}），但未能获取有效 IPv4 地址。',
+                    f'当前接口地址: {current_ip}',
+                ]
+                if packet_info:
+                    diag_lines.append(packet_info)
+                diag_lines.append(f'原因判定: {reason}')
+                diag_lines.append(f'建议: {suggestion}')
+                if dhcp_error:
+                    diag_lines.append(f'DHCP 详情: {dhcp_error}')
+
+                self.last_error = '\n'.join(diag_lines)
                 print(self.last_error)
                 return False
 
@@ -747,12 +894,21 @@ def test_api():
 
 @app.route('/api/servers')
 def get_servers():
-    """获取服务器列表"""
-    servers = vpn_manager.get_vpngate_servers()
+    """获取服务器列表（默认返回缓存，force=1 时强制刷新）"""
+    force = request.args.get('force', '').lower() in ('1', 'true', 'yes', 'on')
+
+    if force or not vpn_manager.servers_cache:
+        fresh = vpn_manager.get_vpngate_servers()
+        if fresh:
+            vpn_manager.servers_cache = fresh
+            vpn_manager.servers_cache_at = datetime.now().isoformat()
+
+    servers = vpn_manager.servers_cache or []
     return jsonify({
         'success': True,
         'servers': servers,
-        'count': len(servers)
+        'count': len(servers),
+        'cached_at': vpn_manager.servers_cache_at,
     })
 
 @app.route('/api/status')

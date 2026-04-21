@@ -36,6 +36,7 @@ RUN apt-get update && apt-get install -y \
     iproute2 \
     iptables \
     dhcpcd5 \
+    udhcpc \
     python3 \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
