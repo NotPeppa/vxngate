@@ -366,6 +366,50 @@
         .copy-feedback.error {
             color: #991b1b;
         }
+
+        .connection-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(2px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            padding: 20px;
+        }
+
+        .connection-overlay.show {
+            display: flex;
+        }
+
+        .connection-panel {
+            width: min(460px, 92vw);
+            background: #ffffff;
+            border-radius: 14px;
+            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.25);
+            padding: 24px;
+            text-align: center;
+        }
+
+        .connection-panel .spinner {
+            border: 4px solid rgba(102, 126, 234, 0.25);
+            border-top: 4px solid #667eea;
+            margin: 0 auto 14px;
+        }
+
+        .connection-title {
+            font-size: 18px;
+            color: #0f172a;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .connection-desc {
+            font-size: 14px;
+            color: #475569;
+            line-height: 1.5;
+        }
     </style>
 </head>
 <body>
@@ -419,11 +463,20 @@
         </div>
     </div>
 
+    <div id="connectionOverlay" class="connection-overlay" aria-live="polite" aria-busy="true">
+        <div class="connection-panel">
+            <div class="spinner"></div>
+            <div class="connection-title" id="connectionTitle">正在连接...</div>
+            <div class="connection-desc" id="connectionDesc">正在建立 VPN 会话并校验 SOCKS5 可用性，请稍候</div>
+        </div>
+    </div>
+
     <script>
         let allServers = [];
         let currentConnection = null;
         let lastErrorText = '';
         let copyFeedbackTimer = null;
+        let isConnecting = false;
 
         // 国家代码到 emoji 旗帜的映射
         const countryFlags = {
@@ -491,6 +544,37 @@
                 currentFeedback.className = 'copy-feedback';
                 currentFeedback.textContent = '';
             }, 1800);
+        }
+
+        function setConnectingState(connecting, ip = '', port = 443) {
+            isConnecting = connecting;
+            const overlay = document.getElementById('connectionOverlay');
+            const title = document.getElementById('connectionTitle');
+            const desc = document.getElementById('connectionDesc');
+
+            if (overlay) {
+                overlay.classList.toggle('show', connecting);
+            }
+
+            if (title) {
+                title.textContent = connecting ? '正在连接...' : '正在连接...';
+            }
+            if (desc) {
+                desc.textContent = connecting
+                    ? `正在连接 ${ip}:${port}，并等待隧道与代理就绪`
+                    : '正在建立 VPN 会话并校验 SOCKS5 可用性，请稍候';
+            }
+
+            document.querySelectorAll('.connect-btn').forEach((btn) => {
+                btn.disabled = connecting;
+                btn.style.opacity = connecting ? '0.65' : '';
+                btn.style.cursor = connecting ? 'not-allowed' : '';
+            });
+
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            if (disconnectBtn) {
+                disconnectBtn.disabled = connecting || !currentConnection;
+            }
         }
 
         async function copyLastMessage() {
@@ -672,12 +756,18 @@
         }
 
         async function connectToServer(ip, port) {
+            if (isConnecting) {
+                return;
+            }
+
             if (currentConnection && currentConnection.ip === ip) {
                 await disconnect();
                 return;
             }
 
             try {
+                setConnectingState(true, ip, port);
+
                 const response = await fetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -691,7 +781,7 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    showMessage('success', '连接成功，SOCKS5 代理已启动在 localhost:1080');
+                    showMessage('success', '连接成功，SOCKS5 代理已启动在 localhost:1080', data.warning || '');
                     await updateStatus();
                 } else {
                     showMessage('error', '连接失败', data.error || data.message || '未知错误');
@@ -699,6 +789,8 @@
             } catch (error) {
                 console.error('连接失败:', error);
                 showMessage('error', '连接失败，请重试', error.message);
+            } finally {
+                setConnectingState(false);
             }
         }
 

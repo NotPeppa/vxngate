@@ -589,6 +589,8 @@ class VPNManager:
         targets = [
             ('api.ipify.org', 443, True),
             ('ipv4.ip.sb', 443, True),
+            ('api.ipify.org', 80, True),
+            ('ipv4.ip.sb', 80, True),
             ('1.1.1.1', 443, False),
         ]
 
@@ -615,7 +617,7 @@ class VPNManager:
         errors = []
         for host, port, is_domain in targets:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(6)
+            sock.settimeout(4)
             try:
                 sock.connect(('127.0.0.1', 1080))
 
@@ -846,9 +848,14 @@ class VPNManager:
 
             socks_ready, socks_ready_error = self.verify_socks_proxy()
             if not socks_ready:
-                self.last_error = f'SOCKS5 可用性校验失败: {socks_ready_error}'
-                print(self.last_error)
-                return False
+                socks_probe_strict = os.environ.get('REQUIRE_SOCKS_PROBE', '0').lower() in ('1', 'true', 'yes', 'on')
+                msg = f'SOCKS5 可用性校验失败: {socks_ready_error}'
+                if socks_probe_strict:
+                    self.last_error = msg
+                    print(self.last_error)
+                    return False
+                self.last_warning = msg
+                print(f'警告: {msg}（已跳过严格校验，继续保持连接）')
             
             self.current_connection = {
                 'ip': server_ip,
@@ -857,7 +864,6 @@ class VPNManager:
             }
             self.save_config()
             self.last_error = None
-            self.last_warning = None
             
             return True
         
@@ -938,7 +944,8 @@ def connect():
     return jsonify({
         'success': success,
         'message': '连接成功' if success else '连接失败',
-        'error': None if success else vpn_manager.last_error
+        'error': None if success else vpn_manager.last_error,
+        'warning': vpn_manager.last_warning if success else None
     })
 
 @app.route('/api/disconnect', methods=['POST'])
