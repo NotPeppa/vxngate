@@ -830,17 +830,28 @@
                     window.location.href = '/login';
                     return;
                 }
-                
-                const data = await response.json();
+
+                const raw = await response.text();
+                let data = null;
+                try {
+                    data = raw ? JSON.parse(raw) : null;
+                } catch (e) {
+                    data = {
+                        success: false,
+                        error: `服务端返回了非 JSON 响应（HTTP ${response.status}）`,
+                        message: raw ? raw.slice(0, 400) : '响应为空'
+                    };
+                }
                 
                 const targetServer = `${ip}:${port}`;
                 const protocolName = protocol === 'openvpn' ? 'OpenVPN' : 'SoftEther';
 
-                if (data.success) {
+                if (response.ok && data && data.success) {
                     showMessage('success', `连接成功（${protocolName}），SOCKS5 代理已启动在 localhost:1080`, data.warning || '');
                     await updateStatus();
                 } else {
-                    showMessage('error', `连接失败（${protocolName} / ${targetServer}）`, data.error || data.message || '未知错误');
+                    const errMsg = (data && (data.error || data.message)) || `HTTP ${response.status}`;
+                    showMessage('error', `连接失败（${protocolName} / ${targetServer}）`, errMsg);
                 }
             } catch (error) {
                 console.error('连接失败:', error);
