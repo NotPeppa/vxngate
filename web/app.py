@@ -136,12 +136,18 @@ class VPNManager:
             return False, '未检测到 VPN IPv4，无法配置策略路由'
 
         table = os.environ.get('VPN_ROUTE_TABLE', '100')
-        cmds = [
-            ['ip', '-4', 'route', 'replace', 'default', 'dev', interface, 'table', table],
-            ['ip', '-4', 'rule', 'replace', 'from', f'{source_ip}/32', 'lookup', table, 'priority', '10000'],
-        ]
+        route_cmd = ['ip', '-4', 'route', 'replace', 'default', 'dev', interface, 'table', table]
+        result = subprocess.run(route_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or '').strip() or f'exit {result.returncode}'
+            return False, f"{' '.join(route_cmd)} 失败: {err}"
 
-        for cmd in cmds:
+        # 兼容不支持 `ip rule replace` 的发行版：先删后加
+        del_cmd = ['ip', '-4', 'rule', 'del', 'from', f'{source_ip}/32', 'lookup', table, 'priority', '10000']
+        subprocess.run(del_cmd, capture_output=True, text=True)
+
+        add_cmd = ['ip', '-4', 'rule', 'add', 'from', f'{source_ip}/32', 'lookup', table, 'priority', '10000']
+        for cmd in [add_cmd]:
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 err = (result.stderr or result.stdout or '').strip() or f'exit {result.returncode}'
