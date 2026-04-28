@@ -185,6 +185,11 @@
             border: 2px solid #28a745;
         }
 
+        .server-card.last-attempted {
+            border: 2px solid #f59e0b;
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+        }
+
         .server-header {
             display: flex;
             justify-content: space-between;
@@ -477,6 +482,7 @@
         let lastErrorText = '';
         let copyFeedbackTimer = null;
         let isConnecting = false;
+        let lastAttemptedServer = null;
 
         // 国家代码到 emoji 旗帜的映射
         const countryFlags = {
@@ -721,7 +727,7 @@
             container.innerHTML = `
                 <div class="servers-grid">
                     ${servers.map(server => `
-                        <div class="server-card ${currentConnection && currentConnection.ip === server.ip ? 'connected' : ''}" 
+                        <div class="server-card ${currentConnection && currentConnection.ip === server.ip ? 'connected' : ''} ${lastAttemptedServer === `${server.ip}:${server.port}` ? 'last-attempted' : ''}" 
                              onclick="connectToServer('${server.ip}', ${server.port})">
                             <div class="server-header">
                                 <div class="country">
@@ -751,7 +757,7 @@
                             </div>
                             
                             <div class="server-footer">
-                                <span class="ip-address">${server.ip}:${server.port}</span>
+                                <span class="ip-address">${server.ip}:${server.port}${lastAttemptedServer === `${server.ip}:${server.port}` ? ' · 最近尝试' : ''}</span>
                                 <button class="connect-btn ${currentConnection && currentConnection.ip === server.ip ? 'connected' : ''}" 
                                         onclick="event.stopPropagation(); connectToServer('${server.ip}', ${server.port})">
                                     ${currentConnection && currentConnection.ip === server.ip ? '断开' : '连接'}
@@ -767,6 +773,9 @@
             if (isConnecting) {
                 return;
             }
+
+            lastAttemptedServer = `${ip}:${port}`;
+            filterServers();
 
             if (currentConnection && currentConnection.ip === ip) {
                 await disconnect();

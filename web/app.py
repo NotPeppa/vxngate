@@ -129,6 +129,52 @@ class VPNManager:
             return None
         return match.group(1)
 
+    def ensure_vpn_policy_route(self, interface='vpn_vpn', source_ip=None):
+        """为 VPN 源地址补充策略路由，避免流量误走 eth0"""
+        source_ip = source_ip or self.get_interface_ipv4(interface)
+        if not source_ip:
+            return False, '未检测到 VPN IPv4，无法配置策略路由'
+
+        table = os.environ.get('VPN_ROUTE_TABLE', '100')
+        cmds = [
+            ['ip', '-4', 'route', 'replace', 'default', 'dev', interface, 'table', table],
+            ['ip', '-4', 'rule', 'replace', 'from', f'{source_ip}/32', 'lookup', table, 'priority', '10000'],
+        ]
+
+        for cmd in cmds:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout or '').strip() or f'exit {result.returncode}'
+                return False, f"{' '.join(cmd)} 失败: {err}"
+
+        return True, None
+
+    def get_network_snapshot(self, interface='vpn_vpn', source_ip=None):
+        """收集接口/路由/规则快照，便于诊断失败原因"""
+        source_ip = source_ip or self.get_interface_ipv4(interface) or 'unknown'
+        table = os.environ.get('VPN_ROUTE_TABLE', '100')
+
+        checks = [
+            ('接口地址', ['ip', '-4', 'addr', 'show', 'dev', interface]),
+            ('主路由', ['ip', '-4', 'route']),
+            ('策略路由', ['ip', 'rule']),
+            (f'路由表{table}', ['ip', '-4', 'route', 'show', 'table', table]),
+            ('源路由查询', ['ip', '-4', 'route', 'get', '1.1.1.1', 'from', source_ip]),
+        ]
+
+        lines = []
+        for title, cmd in checks:
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
+                output = (result.stdout or result.stderr or '').strip()
+                if not output:
+                    output = 'empty'
+                lines.append(f'{title}: {output}')
+            except Exception as e:
+                lines.append(f'{title}: 执行异常: {e}')
+
+        return '\n'.join(lines)
+
     def get_account_session_status(self):
         """读取 SoftEther 账户会话状态"""
         result = subprocess.run(
@@ -828,13 +874,22 @@ class VPNManager:
                 print(self.last_error)
                 return False
 
+            route_ok, route_error = self.ensure_vpn_policy_route('vpn_vpn', vpn_ip)
+            if not route_ok:
+                self.disconnect()
+                net_diag = self.get_network_snapshot('vpn_vpn', vpn_ip)
+                self.last_error = f'VPN 路由配置失败: {route_error}\n网络快照:\n{net_diag}'
+                print(self.last_error)
+                return False
+
             probe_ok, probe_error = self.probe_vpn_egress(vpn_ip)
             if not probe_ok:
                 probe_strict = os.environ.get('REQUIRE_EGRESS_PROBE', '1').lower() in ('1', 'true', 'yes', 'on')
                 msg = f'VPN 真实出网探测失败: {probe_error}'
                 if probe_strict:
                     self.disconnect()
-                    self.last_error = msg
+                    net_diag = self.get_network_snapshot('vpn_vpn', vpn_ip)
+                    self.last_error = f'{msg}\n网络快照:\n{net_diag}'
                     print(self.last_error)
                     return False
                 self.last_warning = msg
@@ -853,7 +908,8 @@ class VPNManager:
                 msg = f'SOCKS5 可用性校验失败: {socks_ready_error}'
                 if socks_probe_strict:
                     self.disconnect()
-                    self.last_error = msg
+                    net_diag = self.get_network_snapshot('vpn_vpn', vpn_ip)
+                    self.last_error = f'{msg}\n网络快照:\n{net_diag}'
                     print(self.last_error)
                     return False
                 self.last_warning = msg
