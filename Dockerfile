@@ -33,6 +33,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y \
     dante-server \
+    openvpn \
     iproute2 \
     iptables \
     dhcpcd5 \

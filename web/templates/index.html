@@ -431,6 +431,10 @@
 
             <div class="controls">
                 <button class="btn btn-primary" onclick="refreshServers()">🔄 刷新服务器列表</button>
+                <select id="protocolSelect" class="btn btn-secondary" style="min-width: 170px;">
+                    <option value="softether">SoftEther</option>
+                    <option value="openvpn">OpenVPN</option>
+                </select>
                 <button class="btn btn-danger" id="disconnectBtn" onclick="disconnect()" disabled>❌ 断开连接</button>
                 <button class="btn btn-secondary" onclick="logout()">🚪 退出登录</button>
             </div>
@@ -757,7 +761,7 @@
                             </div>
                             
                             <div class="server-footer">
-                                <span class="ip-address">${server.ip}:${server.port}${lastAttemptedServer === `${server.ip}:${server.port}` ? ' · 最近尝试' : ''}</span>
+                                <span class="ip-address">${server.ip}:${server.port}${server.supports_openvpn ? ' · OVPN' : ''}${lastAttemptedServer === `${server.ip}:${server.port}` ? ' · 最近尝试' : ''}</span>
                                 <button class="connect-btn ${currentConnection && currentConnection.ip === server.ip ? 'connected' : ''}" 
                                         onclick="event.stopPropagation(); connectToServer('${server.ip}', ${server.port})">
                                     ${currentConnection && currentConnection.ip === server.ip ? '断开' : '连接'}
@@ -774,10 +778,12 @@
                 return;
             }
 
+            const protocol = document.getElementById('protocolSelect')?.value || 'softether';
+
             lastAttemptedServer = `${ip}:${port}`;
             filterServers();
 
-            if (currentConnection && currentConnection.ip === ip) {
+            if (currentConnection && currentConnection.ip === ip && (currentConnection.protocol || 'softether') === protocol) {
                 await disconnect();
                 return;
             }
@@ -789,7 +795,7 @@
                 const response = await fetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ip, port })
+                    body: JSON.stringify({ ip, port, protocol })
                 });
                 if (response.status === 401) {
                     window.location.href = '/login';
@@ -799,12 +805,13 @@
                 const data = await response.json();
                 
                 const targetServer = `${ip}:${port}`;
+                const protocolName = protocol === 'openvpn' ? 'OpenVPN' : 'SoftEther';
 
                 if (data.success) {
-                    showMessage('success', '连接成功，SOCKS5 代理已启动在 localhost:1080', data.warning || '');
+                    showMessage('success', `连接成功（${protocolName}），SOCKS5 代理已启动在 localhost:1080`, data.warning || '');
                     await updateStatus();
                 } else {
-                    showMessage('error', `连接失败（${targetServer}）`, data.error || data.message || '未知错误');
+                    showMessage('error', `连接失败（${protocolName} / ${targetServer}）`, data.error || data.message || '未知错误');
                 }
             } catch (error) {
                 console.error('连接失败:', error);
@@ -855,7 +862,8 @@
                     
                     if (status.connected) {
                         indicator.classList.add('connected');
-                        statusText.textContent = `已连接: ${status.current_server?.ip || '未知'}`;
+                        const protocolName = (status.current_server?.protocol || 'softether') === 'openvpn' ? 'OpenVPN' : 'SoftEther';
+                        statusText.textContent = `已连接(${protocolName}): ${status.current_server?.ip || '未知'}`;
                         disconnectBtn.disabled = false;
                         currentConnection = status.current_server;
                     } else {

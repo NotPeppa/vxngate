@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     ca-certificates \
     dante-server \
+    openvpn \
     iproute2 \
     iptables \
     dhcpcd5 \

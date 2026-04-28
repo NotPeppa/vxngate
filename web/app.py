@@ -13,6 +13,7 @@ import time
 import re
 import socket
 import ssl
+import base64
 from datetime import datetime
 
 app = Flask(__name__)
@@ -82,6 +83,7 @@ class VPNManager:
         self.last_warning = None
         self.servers_cache = None
         self.servers_cache_at = None
+        self.openvpn_proc = None
         self.load_config()
 
     def _bind_socket_to_vpn(self, sock):
@@ -567,7 +569,9 @@ class VPNManager:
                             'score': int(row.get('Score', 0) or 0),
                             # SSL-VPN 端口（通常是 443 或其他）
                             'port': 443,
-                            'supports_ssl': True
+                            'supports_ssl': True,
+                            'supports_openvpn': bool(row.get('OpenVPN_ConfigData_Base64') or row.get('OpenVPN_ConfigDataBase64')),
+                            'openvpn_config_base64': row.get('OpenVPN_ConfigData_Base64') or row.get('OpenVPN_ConfigDataBase64') or ''
                         }
                         servers.append(server)
                 except Exception as e:
@@ -592,6 +596,8 @@ class VPNManager:
     def get_status(self):
         """获取当前 VPN 连接状态"""
         try:
+            openvpn_connected = self.interface_has_ipv4('tun0')
+
             result = subprocess.run(
                 [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 'AccountList'],
                 capture_output=True,
@@ -601,7 +607,11 @@ class VPNManager:
             
             # 解析输出判断是否已连接
             output = result.stdout
-            is_connected = 'Connected' in output or '已连接' in output
+            softether_connected = 'Connected' in output or '已连接' in output
+            is_connected = openvpn_connected or softether_connected
+
+            if is_connected and self.current_connection and not self.current_connection.get('protocol'):
+                self.current_connection['protocol'] = 'openvpn' if openvpn_connected else 'softether'
             
             return {
                 'connected': is_connected,
@@ -622,10 +632,114 @@ class VPNManager:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         output = ((result.stdout or '') + '\n' + (result.stderr or '')).strip()
         return result.returncode == 0, output
-    
+
+    def _build_danted_config(self, external_iface):
+        return f"""logoutput: stderr
+
+internal: 0.0.0.0 port = 1080
+external: {external_iface}
+
+clientmethod: none
+socksmethod: username
+
+user.privileged: root
+user.unprivileged: nobody
+
+client pass {{
+    from: 0.0.0.0/0 to: 0.0.0.0/0
+    log: error
+}}
+
+socks pass {{
+    from: 0.0.0.0/0 to: 0.0.0.0/0
+    socksmethod: username
+    log: error
+}}
+"""
+
+    def _find_server(self, server_ip, server_port=443):
+        servers = self.servers_cache or []
+        for server in servers:
+            if server.get('ip') == server_ip and int(server.get('port', 443)) == int(server_port):
+                return server
+        return None
+
+    def _stop_openvpn(self):
+        if self.openvpn_proc is not None:
+            try:
+                self.openvpn_proc.terminate()
+                self.openvpn_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    self.openvpn_proc.kill()
+                except Exception:
+                    pass
+            self.openvpn_proc = None
+
+        if shutil.which('pkill'):
+            subprocess.run(['pkill', '-9', 'openvpn'], capture_output=True, text=True)
+
+    def _connect_openvpn(self, server_ip, server_port=443):
+        server = self._find_server(server_ip, server_port)
+        if not server:
+            self.last_error = f'未找到服务器配置: {server_ip}:{server_port}（请先刷新服务器列表）'
+            return False
+
+        ovpn_b64 = server.get('openvpn_config_base64', '')
+        if not ovpn_b64:
+            self.last_error = f'服务器 {server_ip}:{server_port} 不支持 OpenVPN 或缺少配置数据'
+            return False
+
+        try:
+            ovpn_text = base64.b64decode(ovpn_b64).decode('utf-8', errors='ignore')
+        except Exception as e:
+            self.last_error = f'解析 OpenVPN 配置失败: {e}'
+            return False
+
+        auth_file = '/tmp/openvpn.auth'
+        conf_file = '/tmp/vpngate-client.ovpn'
+        with open(auth_file, 'w', encoding='utf-8') as f:
+            f.write('vpn\nvpn\n')
+
+        if 'auth-user-pass' not in ovpn_text:
+            ovpn_text += f'\nauth-user-pass {auth_file}\n'
+        if 'script-security' not in ovpn_text:
+            ovpn_text += '\nscript-security 2\n'
+
+        with open(conf_file, 'w', encoding='utf-8') as f:
+            f.write(ovpn_text)
+
+        self._stop_openvpn()
+        proc = subprocess.Popen(
+            ['openvpn', '--config', conf_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.openvpn_proc = proc
+
+        deadline = time.time() + 35
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                out = ''
+                if proc.stdout:
+                    out = proc.stdout.read() or ''
+                self.last_error = f'OpenVPN 进程异常退出: {out[-600:]}'
+                return False
+            if self.interface_exists('tun0'):
+                ip = self.get_interface_ipv4('tun0')
+                if ip and not ip.startswith('169.254.'):
+                    return True
+            time.sleep(1)
+
+        self.last_error = 'OpenVPN 连接超时：tun0 未获得 IPv4 地址'
+        return False
+
     def disconnect(self):
         """断开当前连接"""
         try:
+            self._stop_openvpn()
+
             ok, out = self.run_vpncmd(['AccountDisconnect', 'vpngate'], timeout=10)
             if not ok and 'Error code: 36' not in out:
                 print(f"AccountDisconnect 失败: {out}")
@@ -639,14 +753,17 @@ class VPNManager:
             print(f"断开连接失败: {e}")
             return False
 
-    def start_socks_proxy(self):
+    def start_socks_proxy(self, external_iface='vpn_vpn'):
         """启动 SOCKS5 代理（非阻塞）"""
         try:
             if shutil.which('pkill'):
                 subprocess.run(['pkill', '-9', 'danted'], timeout=5)
 
+            with open('/tmp/danted.runtime.conf', 'w', encoding='utf-8') as f:
+                f.write(self._build_danted_config(external_iface))
+
             proc = subprocess.Popen(
-                ['danted', '-f', '/etc/danted.conf'],
+                ['danted', '-f', '/tmp/danted.runtime.conf'],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
@@ -781,7 +898,7 @@ class VPNManager:
             return False, '；'.join(errors)
         return False, 'SOCKS5 可用性校验失败'
     
-    def connect(self, server_ip, server_port=443):
+    def connect(self, server_ip, server_port=443, protocol='softether'):
         """连接到指定服务器"""
         try:
             self.last_error = None
@@ -793,9 +910,50 @@ class VPNManager:
                 print(self.last_error)
                 return False
 
+            protocol = (protocol or 'softether').lower()
+            if protocol not in ('softether', 'openvpn'):
+                self.last_error = f'不支持的连接方式: {protocol}'
+                return False
+
             # 先断开现有连接
             self.disconnect()
+
+            if protocol == 'openvpn':
+                openvpn_ok = self._connect_openvpn(server_ip, server_port)
+                if not openvpn_ok:
+                    return False
+
+                vpn_ip = self.get_interface_ipv4('tun0')
+                probe_ok, probe_error = self.probe_vpn_egress(vpn_ip)
+                if not probe_ok:
+                    self.disconnect()
+                    net_diag = self.get_network_snapshot('tun0', vpn_ip)
+                    self.last_error = f'VPN 真实出网探测失败: {probe_error}\n网络快照:\n{net_diag}'
+                    return False
+
+                socks_ok, socks_error = self.start_socks_proxy(external_iface='tun0')
+                if not socks_ok:
+                    self.last_error = f'SOCKS5 启动失败: {socks_error}'
+                    return False
+
+                socks_ready, socks_ready_error = self.verify_socks_proxy()
+                if not socks_ready:
+                    self.disconnect()
+                    net_diag = self.get_network_snapshot('tun0', vpn_ip)
+                    self.last_error = f'SOCKS5 可用性校验失败: {socks_ready_error}\n网络快照:\n{net_diag}'
+                    return False
+
+                self.current_connection = {
+                    'ip': server_ip,
+                    'port': server_port,
+                    'protocol': 'openvpn',
+                    'connected_at': datetime.now().isoformat()
+                }
+                self.save_config()
+                self.last_error = None
+                return True
             
+            # 创建 SoftEther 连接
             # 创建新连接
             steps = [
                 ('NicDelete', ['NicDelete', 'vpn']),
@@ -933,7 +1091,7 @@ class VPNManager:
                 print(f'警告: {msg}（已跳过严格校验，继续启动 SOCKS5）')
             
             # 重启 SOCKS5 代理（避免前台进程阻塞导致超时）
-            socks_ok, socks_error = self.start_socks_proxy()
+            socks_ok, socks_error = self.start_socks_proxy(external_iface='vpn_vpn')
             if not socks_ok:
                 self.last_error = f'SOCKS5 启动失败: {socks_error}'
                 print(self.last_error)
@@ -955,6 +1113,7 @@ class VPNManager:
             self.current_connection = {
                 'ip': server_ip,
                 'port': server_port,
+                'protocol': 'softether',
                 'connected_at': datetime.now().isoformat()
             }
             self.save_config()
@@ -1027,6 +1186,7 @@ def connect():
     data = request.json
     server_ip = data.get('ip')
     server_port = data.get('port', 443)
+    protocol = data.get('protocol', 'softether')
     
     if not server_ip:
         return jsonify({
@@ -1034,7 +1194,7 @@ def connect():
             'error': '缺少服务器 IP'
         }), 400
     
-    success = vpn_manager.connect(server_ip, server_port)
+    success = vpn_manager.connect(server_ip, server_port, protocol=protocol)
     
     return jsonify({
         'success': success,

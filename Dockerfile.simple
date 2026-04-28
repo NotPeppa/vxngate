@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     libncurses5-dev \
     zlib1g-dev \
     dante-server \
+    openvpn \
     iproute2 \
     iptables \
     dhcpcd5 \
