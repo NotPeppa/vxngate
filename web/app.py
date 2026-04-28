@@ -136,11 +136,42 @@ class VPNManager:
             return False, '未检测到 VPN IPv4，无法配置策略路由'
 
         table = os.environ.get('VPN_ROUTE_TABLE', '100')
-        route_cmd = ['ip', '-4', 'route', 'replace', 'default', 'dev', interface, 'table', table]
+        gw = None
+
+        # 先尝试从接口路由中提取网关
+        route_show = subprocess.run(
+            ['ip', '-4', 'route', 'show', 'dev', interface],
+            capture_output=True,
+            text=True,
+        )
+        for line in (route_show.stdout or '').splitlines():
+            m = re.search(r'default\s+via\s+(\d+\.\d+\.\d+\.\d+)', line)
+            if m:
+                gw = m.group(1)
+                break
+
+        # 若 DHCP 未下发 default via，则按常见 VPN 网关回退推断 x.x.x.1
+        if not gw:
+            parts = source_ip.split('.')
+            if len(parts) == 4:
+                gw = f'{parts[0]}.{parts[1]}.{parts[2]}.1'
+
+        if gw:
+            route_cmd = ['ip', '-4', 'route', 'replace', 'default', 'via', gw, 'dev', interface, 'table', table]
+        else:
+            route_cmd = ['ip', '-4', 'route', 'replace', 'default', 'dev', interface, 'table', table]
+
         result = subprocess.run(route_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             err = (result.stderr or result.stdout or '').strip() or f'exit {result.returncode}'
             return False, f"{' '.join(route_cmd)} 失败: {err}"
+
+        # 避免重复积累：清理同优先级旧规则，再写入当前源地址规则
+        while True:
+            cleanup_cmd = ['ip', '-4', 'rule', 'del', 'priority', '10000']
+            cleanup_result = subprocess.run(cleanup_cmd, capture_output=True, text=True)
+            if cleanup_result.returncode != 0:
+                break
 
         # 兼容不支持 `ip rule replace` 的发行版：先删后加
         del_cmd = ['ip', '-4', 'rule', 'del', 'from', f'{source_ip}/32', 'lookup', table, 'priority', '10000']
