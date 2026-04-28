@@ -548,6 +548,7 @@
 
         function setConnectingState(connecting, ip = '', port = 443) {
             isConnecting = connecting;
+            document.body.style.cursor = connecting ? 'progress' : '';
             const overlay = document.getElementById('connectionOverlay');
             const title = document.getElementById('connectionTitle');
             const desc = document.getElementById('connectionDesc');
@@ -569,6 +570,13 @@
                 btn.disabled = connecting;
                 btn.style.opacity = connecting ? '0.65' : '';
                 btn.style.cursor = connecting ? 'not-allowed' : '';
+                if (connecting) {
+                    btn.dataset.originalText = btn.textContent;
+                    btn.textContent = '连接中...';
+                } else if (btn.dataset.originalText) {
+                    btn.textContent = btn.dataset.originalText;
+                    delete btn.dataset.originalText;
+                }
             });
 
             const disconnectBtn = document.getElementById('disconnectBtn');
@@ -767,6 +775,7 @@
 
             try {
                 setConnectingState(true, ip, port);
+                await new Promise(resolve => requestAnimationFrame(resolve));
 
                 const response = await fetch('/api/connect', {
                     method: 'POST',
@@ -780,15 +789,17 @@
                 
                 const data = await response.json();
                 
+                const targetServer = `${ip}:${port}`;
+
                 if (data.success) {
                     showMessage('success', '连接成功，SOCKS5 代理已启动在 localhost:1080', data.warning || '');
                     await updateStatus();
                 } else {
-                    showMessage('error', '连接失败', data.error || data.message || '未知错误');
+                    showMessage('error', `连接失败（${targetServer}）`, data.error || data.message || '未知错误');
                 }
             } catch (error) {
                 console.error('连接失败:', error);
-                showMessage('error', '连接失败，请重试', error.message);
+                showMessage('error', `连接失败，请重试（${ip}:${port}）`, error.message);
             } finally {
                 setConnectingState(false);
             }
