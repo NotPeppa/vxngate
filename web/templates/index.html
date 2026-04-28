@@ -251,6 +251,28 @@
             border-top: 1px solid #eee;
         }
 
+        .protocol-tags {
+            margin-top: 8px;
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .protocol-tag {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid #cbd5e1;
+            color: #334155;
+            background: #f8fafc;
+        }
+
+        .protocol-tag.supported {
+            border-color: #16a34a;
+            color: #166534;
+            background: #dcfce7;
+        }
+
         .ip-address {
             font-family: monospace;
             font-size: 12px;
@@ -691,11 +713,13 @@
             const countryFilter = document.getElementById('countryFilter').value.toLowerCase();
             const sortBy = document.getElementById('sortBy').value;
             const minSpeed = parseInt(document.getElementById('minSpeed').value) || 0;
+            const protocol = document.getElementById('protocolSelect')?.value || 'softether';
 
             let filtered = allServers.filter(server => {
                 const matchCountry = server.country.toLowerCase().includes(countryFilter);
                 const matchSpeed = server.speed >= minSpeed;
-                return matchCountry && matchSpeed;
+                const matchProtocol = protocol === 'openvpn' ? !!server.supports_openvpn : true;
+                return matchCountry && matchSpeed && matchProtocol;
             });
 
             // 排序
@@ -740,7 +764,11 @@
                                 </div>
                                 <div class="score">${server.score}</div>
                             </div>
-                            
+                            <div class="protocol-tags">
+                                <span class="protocol-tag supported">SoftEther</span>
+                                <span class="protocol-tag ${server.supports_openvpn ? 'supported' : ''}">${server.supports_openvpn ? 'OpenVPN' : 'OpenVPN(不支持)'}</span>
+                            </div>
+                             
                             <div class="server-info">
                                 <div class="info-item">
                                     <span class="info-label">速度</span>
@@ -795,7 +823,8 @@
                 const response = await fetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ip, port, protocol })
+                    body: JSON.stringify({ ip, port, protocol }),
+                    signal: AbortSignal.timeout(90000)
                 });
                 if (response.status === 401) {
                     window.location.href = '/login';
@@ -895,6 +924,11 @@
         }
 
         // 初始化
+        const protocolSelect = document.getElementById('protocolSelect');
+        if (protocolSelect) {
+            protocolSelect.addEventListener('change', () => filterServers());
+        }
+
         loadServers();
         updateStatus();
         

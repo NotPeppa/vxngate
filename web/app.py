@@ -701,6 +701,8 @@ socks pass {{
         with open(auth_file, 'w', encoding='utf-8') as f:
             f.write('vpn\nvpn\n')
 
+        # VPN Gate OVPN 通常自带 "auth-user-pass"（无路径），这里统一替换为带凭据文件路径
+        ovpn_text = re.sub(r'(?m)^\s*auth-user-pass\s*$', f'auth-user-pass {auth_file}', ovpn_text)
         if 'auth-user-pass' not in ovpn_text:
             ovpn_text += f'\nauth-user-pass {auth_file}\n'
         if 'script-security' not in ovpn_text:
@@ -718,7 +720,7 @@ socks pass {{
         )
         self.openvpn_proc = proc
 
-        deadline = time.time() + 35
+        deadline = time.time() + int(os.environ.get('OPENVPN_CONNECT_TIMEOUT', '45'))
         while time.time() < deadline:
             if proc.poll() is not None:
                 out = ''
