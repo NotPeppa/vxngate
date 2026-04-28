@@ -830,9 +830,10 @@ class VPNManager:
 
             probe_ok, probe_error = self.probe_vpn_egress(vpn_ip)
             if not probe_ok:
-                probe_strict = os.environ.get('REQUIRE_EGRESS_PROBE', '0').lower() in ('1', 'true', 'yes', 'on')
+                probe_strict = os.environ.get('REQUIRE_EGRESS_PROBE', '1').lower() in ('1', 'true', 'yes', 'on')
                 msg = f'VPN 真实出网探测失败: {probe_error}'
                 if probe_strict:
+                    self.disconnect()
                     self.last_error = msg
                     print(self.last_error)
                     return False
@@ -848,9 +849,10 @@ class VPNManager:
 
             socks_ready, socks_ready_error = self.verify_socks_proxy()
             if not socks_ready:
-                socks_probe_strict = os.environ.get('REQUIRE_SOCKS_PROBE', '0').lower() in ('1', 'true', 'yes', 'on')
+                socks_probe_strict = os.environ.get('REQUIRE_SOCKS_PROBE', '1').lower() in ('1', 'true', 'yes', 'on')
                 msg = f'SOCKS5 可用性校验失败: {socks_ready_error}'
                 if socks_probe_strict:
+                    self.disconnect()
                     self.last_error = msg
                     print(self.last_error)
                     return False

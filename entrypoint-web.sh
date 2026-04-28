@@ -11,6 +11,8 @@ WEB_PASSWORD="${WEB_PASSWORD:-admin_change_me}"
 
 export WEB_USERNAME
 export WEB_PASSWORD
+export SOCKS_USERNAME
+export SOCKS_PASSWORD
 
 echo "配置 SOCKS5 认证用户: ${SOCKS_USERNAME}"
 echo "配置 Web 管理用户: ${WEB_USERNAME}"
