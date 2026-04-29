@@ -707,6 +707,9 @@ socks pass {{
             ovpn_text += f'\nauth-user-pass {auth_file}\n'
         if 'script-security' not in ovpn_text:
             ovpn_text += '\nscript-security 2\n'
+        # 避免 OpenVPN 接管容器默认路由导致 Web API 经由隧道出站而失联（前端表现为 502）
+        if 'pull-filter ignore "redirect-gateway"' not in ovpn_text:
+            ovpn_text += '\npull-filter ignore "redirect-gateway"\n'
 
         with open(conf_file, 'w', encoding='utf-8') as f:
             f.write(ovpn_text)
@@ -926,6 +929,13 @@ socks pass {{
                     return False
 
                 vpn_ip = self.get_interface_ipv4('tun0')
+                route_ok, route_error = self.ensure_vpn_policy_route('tun0', vpn_ip)
+                if not route_ok:
+                    self.disconnect()
+                    net_diag = self.get_network_snapshot('tun0', vpn_ip)
+                    self.last_error = f'OpenVPN 路由配置失败: {route_error}\n网络快照:\n{net_diag}'
+                    return False
+
                 probe_ok, probe_error = self.probe_vpn_egress(vpn_ip)
                 if not probe_ok:
                     self.disconnect()
