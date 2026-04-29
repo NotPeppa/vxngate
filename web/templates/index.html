@@ -870,14 +870,24 @@
                     window.location.href = '/login';
                     return;
                 }
+
+                const raw = await response.text();
+                let data = null;
+                try {
+                    data = raw ? JSON.parse(raw) : null;
+                } catch (e) {
+                    data = {
+                        success: false,
+                        error: `服务端返回了非 JSON 响应（HTTP ${response.status}）`,
+                        message: raw ? raw.slice(0, 400) : '响应为空'
+                    };
+                }
                 
-                const data = await response.json();
-                
-                if (data.success) {
+                if (response.ok && data && data.success) {
                     showMessage('success', '已断开连接');
                     await updateStatus();
                 } else {
-                    showMessage('error', '断开失败', data.error || data.message || '未知错误');
+                    showMessage('error', '断开失败', (data && (data.error || data.message)) || `HTTP ${response.status}`);
                 }
             } catch (error) {
                 console.error('断开失败:', error);
@@ -892,9 +902,16 @@
                     window.location.href = '/login';
                     return;
                 }
-                const data = await response.json();
+
+                const raw = await response.text();
+                let data = null;
+                try {
+                    data = raw ? JSON.parse(raw) : null;
+                } catch (e) {
+                    throw new Error(`服务端返回了非 JSON 响应（HTTP ${response.status}）`);
+                }
                 
-                if (data.success) {
+                if (response.ok && data && data.success) {
                     const status = data.status;
                     const indicator = document.getElementById('statusIndicator');
                     const statusText = document.getElementById('statusText');
@@ -914,6 +931,8 @@
                     }
                     
                     filterServers(); // 重新渲染以更新连接状态
+                } else {
+                    throw new Error((data && (data.error || data.message)) || `HTTP ${response.status}`);
                 }
             } catch (error) {
                 console.error('更新状态失败:', error);
