@@ -158,15 +158,23 @@ class VPNManager:
             if len(parts) == 4:
                 gw = f'{parts[0]}.{parts[1]}.{parts[2]}.1'
 
+        route_cmds = []
         if gw:
-            route_cmd = ['ip', '-4', 'route', 'replace', 'default', 'via', gw, 'dev', interface, 'table', table]
-        else:
-            route_cmd = ['ip', '-4', 'route', 'replace', 'default', 'dev', interface, 'table', table]
+            route_cmds.append(['ip', '-4', 'route', 'replace', 'default', 'via', gw, 'dev', interface, 'table', table])
+        route_cmds.append(['ip', '-4', 'route', 'replace', 'default', 'dev', interface, 'table', table])
 
-        result = subprocess.run(route_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
+        route_ok = False
+        last_route_err = None
+        for route_cmd in route_cmds:
+            result = subprocess.run(route_cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                route_ok = True
+                break
             err = (result.stderr or result.stdout or '').strip() or f'exit {result.returncode}'
-            return False, f"{' '.join(route_cmd)} 失败: {err}"
+            last_route_err = f"{' '.join(route_cmd)} 失败: {err}"
+
+        if not route_ok:
+            return False, last_route_err or '默认路由写入失败'
 
         # 避免重复积累：清理同优先级旧规则，再写入当前源地址规则
         while True:
@@ -596,22 +604,30 @@ class VPNManager:
     def get_status(self):
         """获取当前 VPN 连接状态"""
         try:
+            protocol = (self.current_connection or {}).get('protocol', 'softether')
             openvpn_connected = self.interface_has_ipv4('tun0')
 
-            result = subprocess.run(
-                [f'{VPN_CLIENT_PATH}/vpncmd', 'localhost', '/CLIENT', '/CMD', 'AccountList'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            # 解析输出判断是否已连接
-            output = result.stdout
-            softether_connected = 'Connected' in output or '已连接' in output
-            is_connected = openvpn_connected or softether_connected
+            softether_connected = False
+            try:
+                session_status, _ = self.get_account_session_status()
+                softether_connected = session_status == 'Connected' and self.interface_has_ipv4('vpn_vpn')
+            except Exception:
+                softether_connected = False
 
-            if is_connected and self.current_connection and not self.current_connection.get('protocol'):
-                self.current_connection['protocol'] = 'openvpn' if openvpn_connected else 'softether'
+            if self.current_connection:
+                if protocol == 'openvpn':
+                    is_connected = openvpn_connected
+                else:
+                    is_connected = softether_connected
+            else:
+                is_connected = openvpn_connected or softether_connected
+                if is_connected:
+                    self.current_connection = {
+                        'ip': '未知',
+                        'port': 443,
+                        'protocol': 'openvpn' if openvpn_connected else 'softether',
+                        'connected_at': datetime.now().isoformat()
+                    }
             
             return {
                 'connected': is_connected,
@@ -752,6 +768,9 @@ socks pass {{
             ok, out = self.run_vpncmd(['AccountDelete', 'vpngate'], timeout=10)
             if not ok and 'Error code: 36' not in out:
                 print(f"AccountDelete 失败: {out}")
+
+            self.current_connection = None
+            self.save_config()
 
             return True
         except Exception as e:
@@ -931,8 +950,8 @@ socks pass {{
                 vpn_ip = self.get_interface_ipv4('tun0')
                 route_ok, route_error = self.ensure_vpn_policy_route('tun0', vpn_ip)
                 if not route_ok:
-                    self.disconnect()
                     net_diag = self.get_network_snapshot('tun0', vpn_ip)
+                    self.disconnect()
                     self.last_error = f'OpenVPN 路由配置失败: {route_error}\n网络快照:\n{net_diag}'
                     return False
 
